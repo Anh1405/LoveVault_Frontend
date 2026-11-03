@@ -139,6 +139,8 @@ const InlineVideoPlayer: React.FC<{ uri: string }> = ({ uri }) => {
 };
 
 
+const MEDIA_PAGE_SIZE = 12;
+
 const formatDuration = (sec: number): string => {
   const total = Math.max(0, Math.round(sec));
   const m = Math.floor(total / 60);
@@ -405,6 +407,10 @@ export const HomeScreen = () => {
 
   const [eventFilter, setEventFilter] = useState<'ALL' | 'DATE_PLAN' | 'MILESTONE'>('ALL');
   const [mediaFilter, setMediaFilter] = useState<'ALL' | 'IMAGE' | 'VIDEO'>('ALL');
+  const [mediaVisibleCount, setMediaVisibleCount] = useState(MEDIA_PAGE_SIZE);
+  useEffect(() => {
+    setMediaVisibleCount(MEDIA_PAGE_SIZE);
+  }, [mediaFilter]);
 
   const filteredEvents = React.useMemo(() => {
     if (eventFilter === 'DATE_PLAN') {
@@ -2314,24 +2320,28 @@ export const HomeScreen = () => {
                     </Text>
                   </View>
                 ) : (
-                  <FlatList
-  data={filteredMediaList}
-  keyExtractor={(item) => item.id}
-  scrollEnabled={false}
-  numColumns={2}
-  columnWrapperStyle={{ justifyContent: 'space-between' }}
-  initialNumToRender={6}       // Chỉ render 6 ảnh/video đầu tiên khi mở tab
-  maxToRenderPerBatch={6}      // Mỗi đợt chỉ render thêm tối đa 6 mục
-  windowSize={5}               // Giảm dung lượng vùng nhớ đệm xung quanh viewport
-  removeClippedSubviews={Platform.OS === 'android'} // Giải phóng bộ nhớ các item ngoài màn hình trên Android
-  renderItem={({ item }) => (
-    <MediaCardItem
-      item={item}
-      colors={colors}
-      onSelect={setSelectedMedia}
-    />
-  )}
-/>
+                  <View>
+                    <View style={styles.mediaGrid}>
+                      {filteredMediaList.slice(0, mediaVisibleCount).map((item) => (
+                        <MediaCardItem
+                          key={item.id}
+                          item={item}
+                          colors={colors}
+                          onSelect={setSelectedMedia}
+                        />
+                      ))}
+                    </View>
+                    {filteredMediaList.length > mediaVisibleCount && (
+                      <Pressable
+                        style={[styles.mediaLoadMoreBtn, { backgroundColor: colors.surfaceVariant }]}
+                        onPress={() => setMediaVisibleCount((c) => c + MEDIA_PAGE_SIZE)}
+                      >
+                        <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '600' }}>
+                          Xem thêm ({filteredMediaList.length - mediaVisibleCount})
+                        </Text>
+                      </Pressable>
+                    )}
+                  </View>
                 )}
               </View>
             )}
@@ -2861,6 +2871,18 @@ const styles = StyleSheet.create({
     height: 300,
     borderRadius: 12,
     backgroundColor: '#000000',
+  },
+  mediaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  mediaLoadMoreBtn: {
+    alignSelf: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 16,
+    marginTop: 4,
   },
   mediaFilterRow: {
     flexDirection: 'row',
