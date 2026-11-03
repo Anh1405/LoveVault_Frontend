@@ -2477,93 +2477,84 @@ export function useCoupleWorkspace() {
   );
 
   const pickAndSaveMedia = useCallback(
-    async (type: 'VIDEO' | 'IMAGE') => {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert(
-          'Quyền truy cập bị từ chối',
-          'Hãy cấp quyền Thư viện ảnh/video trong Cài đặt để lưu giữ kỷ niệm chung.',
-          [
-            { text: 'Đóng', style: 'cancel' },
-            { text: 'Mở Cài đặt', onPress: () => Linking.openSettings() },
-          ],
-        );
-        return;
-      }
+  async (type: 'VIDEO' | 'IMAGE') => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert(
+        'Quyền truy cập bị từ chối',
+        'Hãy cấp quyền Thư viện ảnh/video trong Cài đặt để lưu giữ kỷ niệm chung.',
+        [
+          { text: 'Đóng', style: 'cancel' },
+          { text: 'Mở Cài đặt', onPress: () => Linking.openSettings() },
+        ],
+      );
+      return;
+    }
 
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: type === 'VIDEO' ? ['videos'] : ['images'],
-        allowsEditing: false,
-        quality: socialPrefs.hdMediaUpload ? 0.92 : 0.75,
-      });
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: type === 'VIDEO' ? ['videos'] : ['images'],
+      allowsEditing: false,
+      quality: socialPrefs.hdMediaUpload ? 0.92 : 0.75,
+    });
 
-      if (result.canceled || !result.assets?.[0]) return;
-      const asset = result.assets[0];
-      setUploadingMedia(true);
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    setUploadingMedia(true);
 
+    try {
+      const todayIso = new Date().toISOString().split('T')[0];
+      const itemId = `media_${Date.now()}`;
+      const captionText = `${type === 'VIDEO' ? 'Thước phim' : 'Bức ảnh'} ngày ${todayIso}`;
+      
+      // Trích xuất durationSec từ asset.duration (mili-giây -> giây)
+      const durationSec = asset.duration ? Math.round(asset.duration / 1000) : 0;
+      
+      let remoteUrl: string | null = null;
+      let finalId = itemId;
+      let syncStatus: SyncStatus = 'PENDING_SYNC';
+
+      // Tải luồng nhị phân lên Cloud và lưu DB (cloudMediaService tự xử lý thumbnail đệ quy)
       try {
-        const todayIso = new Date().toISOString().split('T')[0];
-        const itemId = `media_${Date.now()}`;
-        const captionText = `${type === 'VIDEO' ? 'Thước phim' : 'Bức ảnh'} ngày ${todayIso}`;
-        const durationSec = asset.duration ? Math.round(asset.duration / 1000) : undefined;
-        let remoteUrl: string | null = null;
-        let finalId = itemId;
-        let thumbnailUri: string | null = null;
-        let syncStatus: SyncStatus = 'PENDING_SYNC';
-
-        if (type === 'VIDEO') {
-          try {
-            const thumb = await VideoThumbnails.getThumbnailAsync(asset.uri, {
-              time: 2000,
-            });
-            thumbnailUri = thumb.uri;
-          } catch (e) {
-            console.warn('Không tạo được thumbnail video:', e);
-          }
-        }
-
-        // Tải luồng nhị phân thực sự lên S3/Cloudflare R2 và lưu vào PostgreSQL qua cloudMediaService
-        try {
-          const cloudRecord = await uploadMediaToCloudAndSaveDb({
-            localUri: asset.uri,
-            category: 'ALBUM_MEDIA',
-            mediaType: type,
-            caption: captionText,
-            durationSec,
-            idempotencyKey: itemId,
-          });
-          remoteUrl = cloudRecord.remoteUrl;
-          finalId = cloudRecord.id || itemId;
-          syncStatus = 'SYNCED';
-        } catch {
-          syncStatus = 'PENDING_SYNC';
-        }
-
-        const newMedia: CoupleMediaItem = {
-          id: finalId,
-          uri: remoteUrl || asset.uri,
-          remoteUrl,
-          thumbnailUri,
+        const cloudRecord = await uploadMediaToCloudAndSaveDb({
+          localUri: asset.uri,
+          category: 'ALBUM_MEDIA',
           mediaType: type,
           caption: captionText,
           durationSec,
-          uploaderId: currentUserId,
-          createdAt: todayIso,
-          syncStatus,
-        };
-
-        setMediaList((prev) => {
-          const next = [newMedia, ...prev];
-          storage.setItem(workspaceKeys.MEDIA, JSON.stringify(next)).catch(() => null);
-          return next;
+          idempotencyKey: itemId,
         });
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } finally {
-        setUploadingMedia(false);
+        remoteUrl = cloudRecord.remoteUrl;
+        finalId = cloudRecord.id || itemId;
+        syncStatus = 'SYNCED';
+      } catch {
+        syncStatus = 'PENDING_SYNC';
       }
-    },
-    [currentUserId, socialPrefs.hdMediaUpload, workspaceKeys.MEDIA],
-  );
+
+      const newMedia: CoupleMediaItem = {
+        id: finalId,
+        uri: remoteUrl || asset.uri,
+        remoteUrl,
+        thumbnailUri: null,
+        mediaType: type,
+        caption: captionText,
+        durationSec,
+        uploaderId: currentUserId,
+        createdAt: todayIso,
+        syncStatus,
+      };
+
+      setMediaList((prev) => {
+        const next = [newMedia, ...prev];
+        storage.setItem(workspaceKeys.MEDIA, JSON.stringify(next)).catch(() => null);
+        return next;
+      });
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } finally {
+      setUploadingMedia(false);
+    }
+  },
+  [currentUserId, socialPrefs.hdMediaUpload, workspaceKeys.MEDIA],
+);
 
   const deleteMedia = useCallback(
     async (mediaId: string) => {

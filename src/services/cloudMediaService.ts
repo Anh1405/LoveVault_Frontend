@@ -164,23 +164,27 @@ export const uploadMediaToCloudAndSaveDb = async (
   let thumbnailUrl: string | undefined = undefined;
 
   // 1. Nếu là VIDEO: Tạo thumbnail từ localUri và upload thumbnail trước
-  if (input.mediaType === 'VIDEO' && Platform.OS !== 'web') {
-    try {
-      const { uri: thumbLocalUri } = await VideoThumbnails.getThumbnailAsync(input.localUri, {
-        time: 1000,
-      });
-      // Upload ảnh thumbnail này lên Cloud (gọi đệ quy với mediaType = IMAGE)
-      const thumbRecord = await uploadMediaToCloudAndSaveDb({
-        localUri: thumbLocalUri,
-        category: input.category,
-        mediaType: 'IMAGE',
-        caption: 'thumbnail',
-      });
-      thumbnailUrl = thumbRecord.remoteUrl;
-    } catch (e) {
-      console.warn('Không thể tạo thumbnail cho video:', e);
-    }
+if (input.mediaType === 'VIDEO' && Platform.OS !== 'web') {
+  try {
+    // Tạo thumbnail ảnh từ file video local trên máy (lấy khung hình tại 0.5s)
+    const { uri: thumbLocalUri } = await VideoThumbnails.getThumbnailAsync(input.localUri, {
+      time: 500,
+    });
+
+    // Upload file ảnh thumbnail này lên Cloud trước (gọi đệ quy với mediaType = IMAGE)
+    const thumbRecord = await uploadMediaToCloudAndSaveDb({
+      localUri: thumbLocalUri,
+      category: input.category,
+      mediaType: 'IMAGE',
+      caption: 'thumbnail',
+    });
+
+    // Gán link ảnh remote (.jpg) này vào thumbnailUrl của video
+    thumbnailUrl = thumbRecord.remoteUrl;
+  } catch (e) {
+    console.warn('Không thể tạo thumbnail:', e);
   }
+}
 
   // 2. Nếu là IMAGE: Nén giảm kích thước ảnh xuống tối đa 1920px để tối ưu dung lượng
   if (
