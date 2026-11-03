@@ -13,7 +13,7 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import { DateTimeField } from './DateTimeField';
 import * as Haptics from 'expo-haptics';
 import { ThemeColors } from '../../../constants/theme';
 import { useSettingsStore } from '../../../store/useSettingsStore';
@@ -1627,52 +1627,36 @@ export const EventAndGoalFormModal: React.FC<{
           </ScrollView>
 
           {/* QUẢN LÝ TẤT CẢ DATE/TIME PICKERS NATIVE */}
-          {activePicker === 'DATE' && (
-            <DateTimePicker
-              value={selectedDate}
-              mode="date"
-              onChange={(_, d) => {
-                setActivePicker(null);
-                if (d) setSelectedDate(d);
-              }}
-            />
-          )}
-
-          {activePicker === 'START_TIME' && (
-            <DateTimePicker
-              value={selectedTime}
-              mode="time"
-              is24Hour={true}
-              onChange={(_, t) => {
-                setActivePicker(null);
-                if (t) setSelectedTime(t);
-              }}
-            />
-          )}
-
-          {activePicker === 'END_TIME' && (
-            <DateTimePicker
-              value={endTimeDate}
-              mode="time"
-              is24Hour={true}
-              onChange={(_, t) => {
-                setActivePicker(null);
-                if (t) setEndTimeDate(t);
-              }}
-            />
-          )}
-
-          {activePicker === 'STOP_TIME' && (
-            <DateTimePicker
-              value={stopTimeDate}
-              mode="time"
-              is24Hour={true}
-              onChange={(_, t) => {
-                setActivePicker(null);
-                if (t) setStopTimeDate(t);
-              }}
-            />
-          )}
+          <DateTimeField
+            visible={activePicker !== null}
+            mode={activePicker === 'DATE' ? 'date' : 'time'}
+            colors={colors}
+            title={
+              activePicker === 'DATE'
+                ? 'Chọn ngày'
+                : activePicker === 'END_TIME'
+                  ? 'Chọn giờ về dự kiến'
+                  : activePicker === 'STOP_TIME'
+                    ? 'Chọn giờ của chặng'
+                    : 'Chọn giờ bắt đầu'
+            }
+            value={
+              activePicker === 'DATE'
+                ? selectedDate
+                : activePicker === 'END_TIME'
+                  ? endTimeDate
+                  : activePicker === 'STOP_TIME'
+                    ? stopTimeDate
+                    : selectedTime
+            }
+            onClose={() => setActivePicker(null)}
+            onChange={(d) => {
+              if (activePicker === 'DATE') setSelectedDate(d);
+              else if (activePicker === 'START_TIME') setSelectedTime(d);
+              else if (activePicker === 'END_TIME') setEndTimeDate(d);
+              else if (activePicker === 'STOP_TIME') setStopTimeDate(d);
+            }}
+          />
 
           <View style={[styles.actionFooter, { borderTopColor: colors.borderSubtle }]}>
             <Pressable

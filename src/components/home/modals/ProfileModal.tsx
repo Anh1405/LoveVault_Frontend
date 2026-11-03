@@ -12,7 +12,7 @@ import {
   Platform,
   Alert,
 } from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import { DateTimeField } from './DateTimeField';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import { useAuthStore } from '../../../store/useAuthStore';
@@ -407,22 +407,27 @@ export const ProfileModal: React.FC<{
                   </View>
                 </View>
 
-                {pickingTarget && (
-                  <DateTimePicker
-                    value={new Date(2002, 0, 1)}
-                    mode="date"
-                    maximumDate={new Date()}
-                    onChange={(_, selected) => {
-                      const currentTarget = pickingTarget;
-                      setPickingTarget(null);
-                      if (selected) {
-                        const iso = toIsoDate(selected);
-                        if (currentTarget === 'ME') setMyBirthIso(iso);
-                        else setPartnerBirthIso(iso);
-                      }
-                    }}
-                  />
-                )}
+                <DateTimeField
+                  visible={pickingTarget !== null}
+                  mode="date"
+                  title="Chọn ngày sinh"
+                  colors={colors}
+                  maximumDate={new Date()}
+                  value={(() => {
+                    const iso = pickingTarget === 'PARTNER' ? partnerBirthIso : myBirthIso;
+                    if (iso) {
+                      const [y, m, d] = iso.split('-').map(Number);
+                      if (y && m && d) return new Date(y, m - 1, d);
+                    }
+                    return new Date(2002, 0, 1);
+                  })()}
+                  onClose={() => setPickingTarget(null)}
+                  onChange={(selected) => {
+                    const iso = toIsoDate(selected);
+                    if (pickingTarget === 'ME') setMyBirthIso(iso);
+                    else if (pickingTarget === 'PARTNER') setPartnerBirthIso(iso);
+                  }}
+                />
 
                 <Text style={[styles.helperNote, { color: colors.textSecondary }]}>
                   Mã phòng chung: {coupleId || 'Đang kết nối'}

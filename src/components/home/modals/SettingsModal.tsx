@@ -443,7 +443,7 @@ export const SettingsModal: React.FC<{
                   <Pressable
                     style={[
                       styles.primaryBtn,
-                      { backgroundColor: colors.textPrimary, flex: 0, alignSelf: 'stretch' },
+                      { backgroundColor: colors.textPrimary, flexGrow: 0, flexShrink: 0, flexBasis: 'auto', alignSelf: 'stretch' },
                     ]}
                     onPress={handleChangePassword}
                   >
@@ -466,12 +466,14 @@ export const SettingsModal: React.FC<{
                     Bật để tích hợp nạp/rút và tự tính % theo số tiền MoMo trong mục Mục tiêu.
                   </Text>
                 </View>
-                <Switch
-                  value={momoEnabled}
-                  onValueChange={(val) => void handleToggleMomoEnabled(val)}
-                  trackColor={{ false: colors.outline, true: '#F472B6' }}
-                  thumbColor={momoEnabled ? '#A50064' : '#F8FAFC'}
-                />
+                <View style={{ flexShrink: 0, minWidth: 52, alignItems: 'flex-end', justifyContent: 'center' }}>
+                  <Switch
+                    value={momoEnabled}
+                    onValueChange={(val) => void handleToggleMomoEnabled(val)}
+                    trackColor={{ false: colors.outline, true: '#F472B6' }}
+                    thumbColor={momoEnabled ? '#A50064' : '#F8FAFC'}
+                  />
+                </View>
               </View>
 
               {momoEnabled ? (
@@ -519,7 +521,7 @@ export const SettingsModal: React.FC<{
                   <Pressable
                     style={[
                       styles.primaryBtn,
-                      { backgroundColor: '#A50064', flex: 0, alignSelf: 'stretch' },
+                      { backgroundColor: '#A50064', flexGrow: 0, flexShrink: 0, flexBasis: 'auto', alignSelf: 'stretch' },
                     ]}
                     onPress={handleSaveMomoConfig}
                   >
@@ -813,8 +815,9 @@ export const SettingsModal: React.FC<{
                     styles.primaryBtn,
                     {
                       backgroundColor: colors.textPrimary,
-                      flex: 0,
+                      flexGrow: 0,
                       flexShrink: 0,
+                      flexBasis: 'auto',
                       minWidth: 96,
                       paddingHorizontal: 18,
                     },
@@ -883,7 +886,7 @@ export const SettingsModal: React.FC<{
                   <Pressable
                     style={[
                       styles.primaryBtn,
-                      { backgroundColor: colors.primary, flex: 0, alignSelf: 'stretch' },
+                      { backgroundColor: colors.primary, flexGrow: 0, flexShrink: 0, flexBasis: 'auto', alignSelf: 'stretch' },
                     ]}
                     onPress={handleConfirmImport}
                     disabled={importing}
@@ -904,7 +907,10 @@ export const SettingsModal: React.FC<{
                   styles.secondaryBtn,
                   {
                     backgroundColor: colors.errorContainer,
-                    flex: 0,
+                    flexGrow: 0,
+                    flexShrink: 0,
+                    flexBasis: 'auto',
+                    alignSelf: 'stretch',
                     marginTop: 16,
                     borderWidth: 1,
                     borderColor: colors.error,
