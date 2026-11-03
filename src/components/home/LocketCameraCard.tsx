@@ -270,10 +270,40 @@ async function applySafeWebCamera(
     activeVideo.style.objectFit = 'cover';
     activeVideo.style.width = '100%';
     activeVideo.style.height = '100%';
-    activeVideo.style.transform = facingMode === 'front' ? 'scaleX(-1)' : 'none';
+
+    if (facingMode === 'front') {
+      activeVideo.style.transform = 'scaleX(-1)';
+      return fallback;
+    }
+
+    activeVideo.style.transform = 'none';
 
     const currentStream = activeVideo.srcObject as MediaStream | null;
+    const currentTrack = currentStream?.getVideoTracks()?.[0];
 
+    // 1. Kiểm tra tính năng zoom trực tiếp trên Track nếu trình duyệt hỗ trợ
+    if (currentTrack && typeof (currentTrack as any).getCapabilities === 'function') {
+      try {
+        const capabilities = (currentTrack as any).getCapabilities() || {};
+        if (capabilities.zoom && typeof (currentTrack as any).applyConstraints === 'function') {
+          const minZoom = capabilities.zoom.min ?? 1;
+          const maxZoom = capabilities.zoom.max ?? 1;
+          const targetZoom = requestedMode === '0.5x' ? minZoom : minZoom + (maxZoom - minZoom) * 0.15;
+          await (currentTrack as any).applyConstraints({
+            advanced: [{ zoom: targetZoom }],
+          });
+          return {
+            allBackCams: [],
+            activeCamId: currentTrack.getSettings?.().deviceId || null,
+            modeLabel: requestedMode,
+          };
+        }
+      } catch {
+        // Nếu chuyển zoom trực tiếp thất bại, chuyển sang cơ chế đổi thiết bị (camera device)
+      }
+    }
+
+    // 2. Chuyển thiết bị phần cứng camera
     let videoDevices: MediaDeviceInfo[] = [];
     if (navigator.mediaDevices.enumerateDevices) {
       const devices = await navigator.mediaDevices.enumerateDevices();
@@ -282,64 +312,76 @@ async function applySafeWebCamera(
 
     const backCams = videoDevices.filter(
       (d) =>
-        /(back|rear|environment|sau)/i.test(d.label) && !/(tele|depth|mono)/i.test(d.label),
+        /(back|rear|environment|sau|0\.5|ultra|wide)/i.test(d.label) &&
+        !/(tele|depth|mono|front|trước)/i.test(d.label),
     );
     const availableCams = backCams.length > 0 ? backCams : videoDevices;
 
-    if (facingMode === 'back' && availableCams.length > 0) {
+    if (availableCams.length > 0) {
       let targetCam = availableCams[0];
-      if (requestedMode === '0.5x' && availableCams.length > 1) {
-        targetCam =
-          availableCams.find((d) => /(ultra|0\.5|wide angle|back 1)/i.test(d.label)) ||
-          availableCams[1];
-      } else if (requestedMode === '1x') {
-        targetCam =
-          availableCams.find((d) => /(main|primary|back 0| 0 )/i.test(d.label)) ||
-          availableCams[0];
+      if (requestedMode === '0.5x') {
+        const ultraCam = availableCams.find((d) =>
+          /(ultra|0\.5|0,5|wide|uw|back 1|camera 1)/i.test(d.label),
+        );
+        if (ultraCam) {
+          targetCam = ultraCam;
+        } else if (availableCams.length > 1) {
+          targetCam = availableCams[availableCams.length - 1];
+        }
+      } else {
+        const mainCam = availableCams.find((d) =>
+          /(main|primary|back 0|camera 0|1x)/i.test(d.label),
+        );
+        if (mainCam) {
+          targetCam = mainCam;
+        } else {
+          targetCam = availableCams[0];
+        }
       }
 
-      const currentTrack = currentStream?.getVideoTracks()?.[0];
       const currentId = currentTrack?.getSettings?.().deviceId;
 
       if (targetCam && targetCam.deviceId && targetCam.deviceId !== currentId) {
+        let newStream: MediaStream | null = null;
         try {
-          let newStream: MediaStream | null = null;
-          // 1. Thử lấy exact deviceId
+          newStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: { deviceId: { exact: targetCam.deviceId } },
+          });
+        } catch {
           try {
-            newStream = await navigator.mediaDevices.getUserMedia({
-              audio: false,
-              video: { deviceId: { exact: targetCam.deviceId } },
-            });
-          } catch {
-            // 2. Nếu không hỗ trợ exact (iOS Safari), thử với ideal
             newStream = await navigator.mediaDevices.getUserMedia({
               audio: false,
               video: { deviceId: { ideal: targetCam.deviceId } },
             });
+          } catch {
+            newStream = null;
           }
+        }
 
-          // Chỉ thay thế stream khi thực sự thu được video track hợp lệ
-          if (newStream && newStream.getVideoTracks().length > 0) {
+        // Chỉ thay thế stream khi luồng mới thực sự đang hoạt động (tránh đen màn hình)
+        if (newStream && newStream.getVideoTracks().length > 0) {
+          const newTrack = newStream.getVideoTracks()[0];
+          if (newTrack.readyState === 'live') {
             if (currentStream) {
               currentStream.getTracks().forEach((t) => t.stop());
             }
             activeVideo.srcObject = newStream;
             await activeVideo.play().catch(() => null);
+          } else {
+            newStream.getTracks().forEach((t) => t.stop());
           }
-        } catch {
-          // Bỏ qua lỗi đổi phần cứng, giữ nguyên stream 1x hiện tại không làm đen cam
         }
       }
     }
 
     const finalTrack = (activeVideo.srcObject as MediaStream)?.getVideoTracks()?.[0];
     const finalId = finalTrack?.getSettings?.().deviceId || null;
-    const isUltra = availableCams.find((d) => d.deviceId === finalId && /(ultra|0\.5)/i.test(d.label));
 
     return {
       allBackCams: availableCams,
       activeCamId: finalId,
-      modeLabel: isUltra ? '0.5x' : requestedMode,
+      modeLabel: requestedMode,
     };
   } catch {
     return fallback;
@@ -483,7 +525,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 
   const handleFlipCamera = useCallback(() => {
     void Haptics.selectionAsync().catch(() => {});
-    setIsCameraReady(false);
     setCameraError(null);
     setLensMode('1x');
     setFacing((cur) => (cur === 'front' ? 'back' : 'front'));
@@ -506,14 +547,16 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   }, []);
 
   const handleToggleZoomLens = useCallback(async () => {
-    if (Platform.OS !== 'web' || facing === 'front') return;
+    if (facing === 'front') return;
     void Haptics.selectionAsync().catch(() => {});
     const nextMode = lensMode === '1x' ? '0.5x' : '1x';
     setLensMode(nextMode);
 
-    const res = await applySafeWebCamera('back', nextMode);
-    if (res.allBackCams.length > 0) setWebCamList(res.allBackCams);
-    setLensMode(res.modeLabel);
+    if (Platform.OS === 'web') {
+      const res = await applySafeWebCamera('back', nextMode);
+      if (res.allBackCams.length > 0) setWebCamList(res.allBackCams);
+      setLensMode(res.modeLabel);
+    }
   }, [facing, lensMode]);
 
   const handleMountError = useCallback((e: { message?: string }) => {
@@ -713,7 +756,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         ) : shouldMountCamera ? (
           <View style={styles.sensorCenterWrap}>
             <CameraView
-              key={`camera-${facing}`}
               ref={cameraRef}
               style={
                 Platform.OS === 'web'
@@ -749,34 +791,31 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
                 <View style={{ width: 42, height: 42 }} />
               )}
 
-              {showCameraChrome &&
-                Platform.OS === 'web' &&
-                facing === 'back' &&
-                webCamList.length > 1 && (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Chuyển đổi góc chụp 0.5x và 1x"
-                    onPress={() => void handleToggleZoomLens()}
-                    style={({ pressed }) => [styles.modernLensPill, pressed && styles.pressed]}
+              {showCameraChrome && facing === 'back' && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Chuyển đổi góc chụp 0.5x và 1x"
+                  onPress={() => void handleToggleZoomLens()}
+                  style={({ pressed }) => [styles.modernLensPill, pressed && styles.pressed]}
+                >
+                  <Text
+                    style={[
+                      styles.lensTextItem,
+                      lensMode === '0.5x' && styles.lensTextActive,
+                    ]}
                   >
-                    <Text
-                      style={[
-                        styles.lensTextItem,
-                        lensMode === '0.5x' && styles.lensTextActive,
-                      ]}
-                    >
-                      0.5
-                    </Text>
-                    <Text
-                      style={[
-                        styles.lensTextItem,
-                        lensMode === '1x' && styles.lensTextActive,
-                      ]}
-                    >
-                      1x
-                    </Text>
-                  </Pressable>
-                )}
+                    0.5
+                  </Text>
+                  <Text
+                    style={[
+                      styles.lensTextItem,
+                      lensMode === '1x' && styles.lensTextActive,
+                    ]}
+                  >
+                    1x
+                  </Text>
+                </Pressable>
+              )}
             </View>
 
             <View

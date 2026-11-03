@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { DateTimeField } from './DateTimeField';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import { useAuthStore } from '../../../store/useAuthStore';
 import { ThemeColors, getZodiacSign } from '../../../constants/theme';
@@ -24,6 +25,27 @@ import {
   toIsoDate,
 } from './modalConstantsAndUtils';
 import { styles } from './modalSharedStyles';
+
+// Hàm hỗ trợ lưu ảnh từ thư mục Cache sang thư mục lưu trữ vĩnh viễn (Document Directory)
+const saveAvatarPermanently = async (uri: string | null): Promise<string | null> => {
+  if (!uri) return null;
+  // Nếu là Web hoặc đường dẫn đã nằm trong documentDirectory / remote URL thì giữ nguyên
+  if (Platform.OS === 'web' || uri.includes(FileSystem.documentDirectory || '')) {
+    return uri;
+  }
+  try {
+    const filename = `avatar_${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`;
+    const permanentPath = `${FileSystem.documentDirectory}${filename}`;
+    await FileSystem.copyAsync({
+      from: uri,
+      to: permanentPath,
+    });
+    return permanentPath;
+  } catch (error) {
+    console.error('Lỗi khi lưu avatar vĩnh viễn:', error);
+    return uri;
+  }
+};
 
 export const ProfileModal: React.FC<{
   visible: boolean;
@@ -76,8 +98,7 @@ export const ProfileModal: React.FC<{
 
   const prevVisibleRef = useRef(false);
 
-  // Chỉ đồng bộ state từ store vào form khi Modal chuyển từ đóng sang mở
-  // Tránh việc store cập nhật ngầm hoặc đổi ảnh đại diện làm mất ngày sinh / biệt danh đang nhập
+  // Chỉ đồng bộ state từ Store khi Modal được mở ra
   useEffect(() => {
     if (visible && !prevVisibleRef.current) {
       setMyNick(myProfile.nickname);
@@ -142,6 +163,7 @@ export const ProfileModal: React.FC<{
     return { overall, foodMatch, telepathy };
   }, [myNick, partnerNick, myBirthIso, partnerBirthIso]);
 
+  // Chọn ảnh avatar và lưu vào local state (Không gọi updateProfiles ngay lập tức)
   const pickAvatar = async (target: 'ME' | 'PARTNER') => {
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
@@ -153,10 +175,8 @@ export const ProfileModal: React.FC<{
       const selectedUri = res.assets[0].uri;
       if (target === 'ME') {
         setMyAvatarUri(selectedUri);
-        await updateProfiles({ avatarUri: selectedUri });
       } else {
         setPartnerAvatarUri(selectedUri);
-        await updateProfiles(undefined, { avatarUri: selectedUri });
       }
     }
   };
@@ -251,27 +271,36 @@ export const ProfileModal: React.FC<{
     );
   };
 
+  // Lưu toàn bộ thông tin profile & avatar vĩnh viễn
   const handleSaveProfile = async () => {
+    // 1. Lưu ảnh đại diện từ Cache sang thư mục vĩnh viễn (DocumentDirectory)
+    const permanentMyAvatar = await saveAvatarPermanently(myAvatarUri);
+    const permanentPartnerAvatar = await saveAvatarPermanently(partnerAvatarUri);
+
+    // 2. Cập nhật Store đồng thời cả Tên, Ngày sinh và Avatar vĩnh viễn
     await updateProfiles(
       {
         nickname: myNick.trim() || 'Bạn',
         birthDate: myBirthIso,
         moodEmoji: myMood,
-        avatarUri: myAvatarUri ?? myProfile.avatarUri,
+        avatarUri: permanentMyAvatar,
         lastActiveAt: 'Đang hoạt động',
       },
       {
         nickname: partnerNick.trim() || 'Người ấy',
         birthDate: partnerBirthIso,
-        avatarUri: partnerAvatarUri ?? partnerProfile.avatarUri,
+        avatarUri: permanentPartnerAvatar,
       },
     );
+
+    // 3. Cập nhật Ghi chú riêng
     await updateMyPrivateNote({
       favDrink,
       shoeClothSize,
       howToComfort,
       secretNote,
     });
+
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     onClose();
   };
