@@ -2510,6 +2510,8 @@ export function useCoupleWorkspace() {
       const durationSec = asset.duration ? Math.round(asset.duration / 1000) : 0;
       
       let remoteUrl: string | null = null;
+      let thumbnailUri: string | null = null;
+      let finalDuration = durationSec;
       let finalId = itemId;
       let syncStatus: SyncStatus = 'PENDING_SYNC';
 
@@ -2524,6 +2526,8 @@ export function useCoupleWorkspace() {
           idempotencyKey: itemId,
         });
         remoteUrl = cloudRecord.remoteUrl;
+        thumbnailUri = cloudRecord.thumbnailUrl ?? null;
+        finalDuration = cloudRecord.durationSec ?? durationSec;
         finalId = cloudRecord.id || itemId;
         syncStatus = 'SYNCED';
       } catch {
@@ -2534,10 +2538,10 @@ export function useCoupleWorkspace() {
         id: finalId,
         uri: remoteUrl || asset.uri,
         remoteUrl,
-        thumbnailUri: null,
+        thumbnailUri,
         mediaType: type,
         caption: captionText,
-        durationSec,
+        durationSec: finalDuration,
         uploaderId: currentUserId,
         createdAt: todayIso,
         syncStatus,

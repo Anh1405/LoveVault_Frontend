@@ -74,6 +74,45 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const buildIdempotencyKey = (prefix: string) =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
+
+/**
+ * Web: đọc duration và chụp khung hình đầu của video bằng <video> + <canvas>,
+ * vì expo-video-thumbnails và asset.duration không hoạt động đầy đủ trên web.
+ */
+const getWebVideoMeta = (
+  uri: string,
+): Promise<{ durationSec: number; thumbnailUri: string | null }> =>
+  new Promise((resolve) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    video.src = uri;
+
+    let durationSec = 0;
+    const fail = () => resolve({ durationSec, thumbnailUri: null });
+
+    video.onloadedmetadata = () => {
+      durationSec = Math.round(video.duration) || 0;
+      video.currentTime = Math.min(0.5, (video.duration || 1) / 2);
+    };
+    video.onseeked = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        const srcW = video.videoWidth || 640;
+        const srcH = video.videoHeight || 360;
+        const scale = Math.min(1, 640 / srcW);
+        canvas.width = Math.round(srcW * scale);
+        canvas.height = Math.round(srcH * scale);
+        canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
+        resolve({ durationSec, thumbnailUri: canvas.toDataURL('image/jpeg', 0.7) });
+      } catch {
+        fail();
+      }
+    };
+    video.onerror = fail;
+  });
+
 const readPendingQueue = async (): Promise<PendingMediaQueueItem[]> => {
   try {
     const raw = await storage.getItem(PENDING_MEDIA_SYNC_KEY);
@@ -162,29 +201,35 @@ export const uploadMediaToCloudAndSaveDb = async (
 ): Promise<CloudMediaRecord> => {
   let uploadUri = input.localUri;
   let thumbnailUrl: string | undefined = undefined;
+  let durationSec = input.durationSec;
 
-  // 1. Nếu là VIDEO: Tạo thumbnail từ localUri và upload thumbnail trước
-if (input.mediaType === 'VIDEO' && Platform.OS !== 'web') {
-  try {
-    // Tạo thumbnail ảnh từ file video local trên máy (lấy khung hình tại 0.5s)
-    const { uri: thumbLocalUri } = await VideoThumbnails.getThumbnailAsync(input.localUri, {
-      time: 500,
-    });
+  // 1. Nếu là VIDEO: tạo thumbnail (web dùng canvas, native dùng expo-video-thumbnails) rồi upload trước
+  if (input.mediaType === 'VIDEO') {
+    try {
+      let thumbLocalUri: string | null = null;
 
-    // Upload file ảnh thumbnail này lên Cloud trước (gọi đệ quy với mediaType = IMAGE)
-    const thumbRecord = await uploadMediaToCloudAndSaveDb({
-      localUri: thumbLocalUri,
-      category: input.category,
-      mediaType: 'IMAGE',
-      caption: 'thumbnail',
-    });
+      if (Platform.OS === 'web') {
+        const meta = await getWebVideoMeta(input.localUri);
+        thumbLocalUri = meta.thumbnailUri;
+        if (!durationSec) durationSec = meta.durationSec;
+      } else {
+        const t = await VideoThumbnails.getThumbnailAsync(input.localUri, { time: 500 });
+        thumbLocalUri = t.uri;
+      }
 
-    // Gán link ảnh remote (.jpg) này vào thumbnailUrl của video
-    thumbnailUrl = thumbRecord.remoteUrl;
-  } catch (e) {
-    console.warn('Không thể tạo thumbnail:', e);
+      if (thumbLocalUri) {
+        const thumbRecord = await uploadMediaToCloudAndSaveDb({
+          localUri: thumbLocalUri,
+          category: input.category,
+          mediaType: 'IMAGE',
+          caption: 'thumbnail',
+        });
+        thumbnailUrl = thumbRecord.remoteUrl;
+      }
+    } catch (e) {
+      console.warn('Không thể tạo thumbnail:', e);
+    }
   }
-}
 
   // 2. Nếu là IMAGE: Nén giảm kích thước ảnh xuống tối đa 1920px để tối ưu dung lượng
   if (
@@ -275,7 +320,7 @@ if (input.mediaType === 'VIDEO' && Platform.OS !== 'web') {
           thumbnailUrl,
           caption: input.caption || undefined,
           stamp: input.stamp || undefined,
-          durationSec: input.durationSec,
+          durationSec,
           idempotencyKey,
         },
       );
