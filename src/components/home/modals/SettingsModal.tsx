@@ -927,19 +927,34 @@ export const SettingsModal: React.FC<{
 
           <View style={[styles.actionFooter, { borderTopColor: colors.borderSubtle }]}>
             <Pressable
-              style={[styles.secondaryBtn, { backgroundColor: colors.surfaceVariant }]}
-              onPress={onClose}
-            >
-              <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: 14 }}>Đóng</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.primaryBtn, { backgroundColor: colors.error }]}
+              accessibilityRole="button"
+              accessibilityLabel="Đăng xuất"
+              style={[styles.secondaryBtn, { backgroundColor: colors.surfaceVariant, flex: 0.8 }]}
               onPress={() => {
                 onClose();
                 onLogout();
               }}
             >
-              <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 14 }}>Đăng xuất</Text>
+              <Text style={{ color: colors.error, fontWeight: '600', fontSize: 13 }}>Đăng xuất</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Đóng cài đặt"
+              style={[
+                styles.primaryBtn,
+                {
+                  backgroundColor: colors.primary,
+                  flex: 1.6,
+                  shadowColor: colors.primary,
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.35,
+                  shadowRadius: 8,
+                  elevation: 6,
+                },
+              ]}
+              onPress={onClose}
+            >
+              <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 15 }}>Đóng</Text>
             </Pressable>
           </View>
         </View>

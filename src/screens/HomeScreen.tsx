@@ -860,12 +860,39 @@ export const HomeScreen = () => {
       }),
     [scrollX, screenWidth, switchSegWidth],
   );
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    },
+    [],
+  );
+  const syncPageFromOffset = useCallback(
+    (x: number) => {
+      const idx: 0 | 1 = x > screenWidth / 2 ? 1 : 0;
+      setCurrentPage((prev) => (prev === idx ? prev : idx));
+
+      // Web: nếu dừng kéo giữa hai trang thì tự căn về trang gần nhất
+      if (Platform.OS === 'web') {
+        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = setTimeout(() => {
+          const target = idx * screenWidth;
+          if (Math.abs(x - target) > 2) {
+            horizontalPagerRef.current?.scrollTo({ x: target, animated: true });
+          }
+        }, 150);
+      }
+    },
+    [screenWidth],
+  );
   const onPagerScroll = React.useMemo(
     () =>
       Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], {
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
+        listener: (e: NativeSyntheticEvent<NativeScrollEvent>) =>
+          syncPageFromOffset(e.nativeEvent.contentOffset.x),
       }),
-    [scrollX],
+    [scrollX, syncPageFromOffset],
   );
   const handleSwitchLayout = useCallback((e: LayoutChangeEvent) => {
     setSwitchWidth(e.nativeEvent.layout.width);
@@ -1141,6 +1168,9 @@ export const HomeScreen = () => {
         showsHorizontalScrollIndicator={false}
         bounces={false}
         decelerationRate="fast"
+        disableIntervalMomentum
+        snapToInterval={screenWidth}
+        snapToAlignment="start"
         onScroll={onPagerScroll}
         onMomentumScrollEnd={handleHorizontalMomentumEnd}
         scrollEventThrottle={16}
