@@ -45,10 +45,15 @@ const GLASS = 'rgba(24, 14, 18, 0.42)';
 const CAPTION_MAX = 80;
 const FRAME_PAD = 5;
 const FRAME_BORDER = 1.5;
-const SIDE_BTN = 56;
-const HALO = 100;
-const RING = 84;
-const CORE = 66;
+const SIDE_BTN = 52;
+const HALO = 92;
+const RING = 78;
+const CORE = 60;
+
+// Giới hạn kích thước khung camera để không bị phóng quá to trên màn hình lớn / điện thoại
+const MAX_VIEWPORT_SIZE = 300;
+const MIN_VIEWPORT_SIZE = 230;
+const VIEWPORT_SCREEN_RATIO = 0.78;
 
 export interface LocketStampItem {
   id: string;
@@ -183,7 +188,7 @@ const FlipButton = memo(function FlipButton({
       label={facing === 'front' ? 'Đổi sang camera sau' : 'Đổi sang camera trước'}
     >
       <Animated.View style={{ transform: [{ rotate }] }}>
-        <FlipIcon size={28} color={color} />
+        <FlipIcon size={26} color={color} />
       </Animated.View>
     </SideButton>
   );
@@ -252,9 +257,9 @@ const ShutterButton = memo(function ShutterButton({
             {busy ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : variant === 'send' ? (
-              <SendIcon size={28} color="#FFFFFF" />
+              <SendIcon size={26} color="#FFFFFF" />
             ) : (
-              <HeartIcon size={30} color="#FFFFFF" />
+              <HeartIcon size={28} color="#FFFFFF" />
             )}
           </View>
         </View>
@@ -269,7 +274,7 @@ const ShutterButton = memo(function ShutterButton({
 /**
  * Trên Web (Mobile Chrome / Safari), tự động:
  * 1. Đưa mức phần cứng zoom của track về mức nhỏ nhất / 1x (tránh bị kẹt zoom 2x).
- * 2. Yêu cầu tỷ lệ khung hình 1:1 từ cảm biến để không bị crop phóng to bởi object-fit: cover.
+ * 2. Yêu cầu tỷ lệ khung hình 4:3 hoặc 1:1 từ cảm biến để không bị crop phóng to bởi object-fit: cover.
  */
 async function normalizeWebCameraStreamTo1x(facingMode: CameraType) {
   if (Platform.OS !== 'web' || typeof document === 'undefined' || !navigator?.mediaDevices) {
@@ -314,7 +319,8 @@ async function normalizeWebCameraStreamTo1x(facingMode: CameraType) {
           audio: false,
           video: {
             deviceId: { exact: preferredMainCam.deviceId },
-            width: { ideal: 1920 },
+            aspectRatio: { ideal: 1 },
+            width: { ideal: 1080 },
             height: { ideal: 1080 },
           },
         });
@@ -331,13 +337,12 @@ async function normalizeWebCameraStreamTo1x(facingMode: CameraType) {
       const advanced: Record<string, any> = {};
 
       if (caps.zoom) {
-        // Lấy giá trị zoom nhỏ nhất mà phần cứng cho phép (thường là 1 hoặc 0.5)
         advanced.zoom = caps.zoom.min ?? 1;
       }
 
       await currentTrack.applyConstraints({
-        // Yêu cầu kích thước cảm biến gốc 4:3 hoặc 16:9 để không bị crop phần cứng
-        width: { ideal: 1920 },
+        aspectRatio: { ideal: 1 },
+        width: { ideal: 1080 },
         height: { ideal: 1080 },
         ...(Object.keys(advanced).length > 0 ? { advanced: [advanced] } : {}),
       } as MediaTrackConstraints);
@@ -346,6 +351,7 @@ async function normalizeWebCameraStreamTo1x(facingMode: CameraType) {
     // Bỏ qua nếu trình duyệt không cho phép thay đổi constraints
   }
 }
+
 const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   colors,
   isPageActive,
@@ -359,11 +365,20 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 }) => {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const frameInset = (FRAME_PAD + FRAME_BORDER) * 2;
+
+  // Thu gọn kích thước khung camera (khoảng 78% chiều ngang màn hình và tối đa 300px)
+  // giúp khung hình gọn gàng, đồng thời giảm hiện tượng bị phóng to / crop quá sát mặt
+  const availableWidth = screenWidth - METRICS.paddingHorizontal * 2 - frameInset;
+  const maxByHeight = Math.max(MIN_VIEWPORT_SIZE, screenHeight - reservedHeight - 250);
   const viewportSize = Math.max(
-    260,
-    Math.round(screenWidth - METRICS.paddingHorizontal * 2 - frameInset),
+    MIN_VIEWPORT_SIZE,
+    Math.min(
+      MAX_VIEWPORT_SIZE,
+      maxByHeight,
+      Math.round(availableWidth * VIEWPORT_SCREEN_RATIO),
+    ),
   );
-  const stageMinHeight = Math.max(560, screenHeight - reservedHeight);
+  const stageMinHeight = Math.max(500, screenHeight - reservedHeight);
 
   const { myProfile, partnerProfile, updateProfiles } = useSettingsStore();
 
@@ -592,7 +607,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         </View>
       </View>
 
-      {/* Khung camera */}
+      {/* Khung camera (thu gọn vừa vặn) */}
       <View
         style={[
           styles.frame,
@@ -659,16 +674,17 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
             </View>
           ) : shouldMountCamera ? (
             <CameraView
-  ref={cameraRef}
-  style={{ width: viewportSize, height: viewportSize }}
-  facing={facing}
-  flash={flash}
-  zoom={0} // Luôn đặt zoom = 0 để lấy góc rộng nhất
-  mirror={facing === 'front'}
-  mode="picture"
-  onCameraReady={handleCameraReady}
-  onMountError={handleMountError}
-/>
+              ref={cameraRef}
+              style={{ width: viewportSize, height: viewportSize }}
+              facing={facing}
+              flash={flash}
+              zoom={0}
+              ratio="4:3"
+              mirror={facing === 'front'}
+              mode="picture"
+              onCameraReady={handleCameraReady}
+              onMountError={handleMountError}
+            />
           ) : (
             <View style={styles.fallback}>
               <Text style={[styles.fallbackDesc, { color: colors.textSecondary }]}>
@@ -683,7 +699,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
               <View
                 style={[
                   styles.stampBadge,
-                  { backgroundColor: colors.primary, maxWidth: viewportSize - 12 * 2 - 44 - 10 },
+                  { backgroundColor: colors.primary, maxWidth: viewportSize - 10 * 2 - 40 - 8 },
                 ]}
                 pointerEvents="none"
               >
@@ -694,7 +710,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 
               {showCameraChrome && (
                 <GlassButton onPress={handleFlashCycle} label={FLASH_LABEL[flash]}>
-                  <FlashIcon mode={flash} size={24} />
+                  <FlashIcon mode={flash} size={22} />
                 </GlassButton>
               )}
             </View>
@@ -704,7 +720,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
           {granted && (
             <View style={styles.overlayBottom} pointerEvents="box-none">
               <View style={styles.captionPill}>
-                <PencilIcon size={14} color="#FFFFFF" />
+                <PencilIcon size={13} color="#FFFFFF" />
                 <TextInput
                   value={caption}
                   onChangeText={setCaption}
@@ -724,7 +740,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 
       {/* Hàng nút: thư viện, chụp, đổi camera (hoặc chụp lại, gửi) */}
       <View style={styles.shutterSection}>
-        <View style={styles.shutterRow}>
+        <View style={[styles.shutterRow, { maxWidth: viewportSize + 40 }]}>
           {previewUri ? (
             <SideButton
               onPress={handleRetake}
@@ -732,7 +748,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
               bg={colors.surfaceVariant}
               label="Chụp lại"
             >
-              <CloseIcon size={24} color={colors.textPrimary} />
+              <CloseIcon size={22} color={colors.textPrimary} />
             </SideButton>
           ) : (
             <SideButton
@@ -740,7 +756,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
               bg={colors.surfaceVariant}
               label="Chọn ảnh từ thư viện"
             >
-              <GalleryIcon size={28} color={colors.textPrimary} />
+              <GalleryIcon size={26} color={colors.textPrimary} />
             </SideButton>
           )}
 
@@ -866,7 +882,7 @@ const styles = StyleSheet.create({
   root: {
     marginHorizontal: -METRICS.paddingHorizontal,
     paddingHorizontal: METRICS.paddingHorizontal,
-    paddingTop: 10,
+    paddingTop: 8,
     paddingBottom: 8,
   },
   pressed: { opacity: 0.7 },
@@ -877,7 +893,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   personBox: {
     flex: 1,
@@ -901,14 +917,14 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     padding: FRAME_PAD,
     borderWidth: FRAME_BORDER,
-    borderRadius: 34,
-    shadowOpacity: 0.16,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 6,
+    borderRadius: 30,
+    shadowOpacity: 0.14,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 5,
   },
   viewport: {
-    borderRadius: 28,
+    borderRadius: 24,
     overflow: 'hidden',
     position: 'relative',
   },
@@ -917,7 +933,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    padding: 20,
   },
   fallbackTitle: { fontSize: 15, fontWeight: '700', marginBottom: 6 },
   fallbackDesc: { fontSize: 13, textAlign: 'center', marginBottom: 14, lineHeight: 18 },
@@ -932,9 +948,9 @@ const styles = StyleSheet.create({
 
   overlayTop: {
     position: 'absolute',
-    top: 12,
-    left: 12,
-    right: 12,
+    top: 10,
+    left: 10,
+    right: 10,
     zIndex: 10,
     elevation: 6,
     flexDirection: 'row',
@@ -942,15 +958,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   stampBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 16,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 14,
   },
-  stampBadgeText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  stampBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   glassBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: GLASS,
     justifyContent: 'center',
     alignItems: 'center',
@@ -958,29 +974,29 @@ const styles = StyleSheet.create({
 
   overlayBottom: {
     position: 'absolute',
-    left: 12,
-    right: 12,
-    bottom: 12,
+    left: 10,
+    right: 10,
+    bottom: 10,
     zIndex: 10,
     elevation: 6,
     alignItems: 'center',
   },
   captionPill: {
-    maxWidth: '90%',
-    minHeight: 40,
+    maxWidth: '92%',
+    minHeight: 36,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: Platform.OS === 'ios' ? 6 : 2,
-    borderRadius: 20,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === 'ios' ? 5 : 2,
+    borderRadius: 18,
     backgroundColor: GLASS,
   },
   captionInlineInput: {
     flexShrink: 1,
-    minWidth: 100,
+    minWidth: 90,
     color: '#FFFFFF',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
     paddingVertical: 0,
     paddingHorizontal: 0,
@@ -991,14 +1007,14 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 14,
+    paddingVertical: 10,
   },
   shutterRow: {
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
+    paddingHorizontal: 12,
   },
   sideBtn: {
     width: SIDE_BTN,
@@ -1030,7 +1046,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  sendLabel: { marginTop: 8, fontSize: 12, fontWeight: '600' },
+  sendLabel: { marginTop: 6, fontSize: 12, fontWeight: '600' },
 
   fieldHintLabel: { fontSize: 11, fontWeight: '600', marginBottom: 4 },
   stampScrollOuter: { alignSelf: 'stretch', flexGrow: 0 },
@@ -1048,7 +1064,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 8,
+    marginTop: 6,
   },
   footerItem: {
     minHeight: METRICS.minTouchTarget,
