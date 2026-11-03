@@ -3,7 +3,7 @@ import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { storage, setAccessToken } from './storage';
 
 // Đổi IP này trùng với IPv4 của máy tính đang chạy Backend NestJS
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.11:3000';
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'https://lovevault-backend.onrender.com';
 
 export const api = axios.create({
   baseURL: BASE_URL,
