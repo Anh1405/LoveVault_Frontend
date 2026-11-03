@@ -262,8 +262,6 @@ async function applySafeWebCamera(
     return fallback;
   }
 
-  await new Promise((r) => setTimeout(r, 150));
-
   try {
     const videos = Array.from(document.querySelectorAll('video'));
     const activeVideo = videos.find((v) => v.srcObject instanceof MediaStream);
@@ -367,6 +365,12 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   const [webCamList, setWebCamList] = useState<MediaDeviceInfo[]>([]);
   const [lensMode, setLensMode] = useState<'0.5x' | '1x'>('1x');
 
+  const facingRef = useRef(facing);
+  facingRef.current = facing;
+
+  const lensModeRef = useRef(lensMode);
+  lensModeRef.current = lensMode;
+
   const initialStampText = useMemo(() => {
     if (myProfile.customStatusText) return myProfile.customStatusText;
     const first = stamps[0];
@@ -465,7 +469,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 
   const handleFlipCamera = useCallback(() => {
     void Haptics.selectionAsync().catch(() => {});
-    setIsCameraReady(false);
     setCameraError(null);
     setFacing((cur) => (cur === 'front' ? 'back' : 'front'));
   }, []);
@@ -479,12 +482,12 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     setIsCameraReady(true);
     setCameraError(null);
     if (Platform.OS === 'web') {
-      void applySafeWebCamera(facing, lensMode).then((res) => {
+      void applySafeWebCamera(facingRef.current, lensModeRef.current).then((res) => {
         if (res.allBackCams.length > 0) setWebCamList(res.allBackCams);
         setLensMode(res.modeLabel);
       });
     }
-  }, [facing, lensMode]);
+  }, []);
 
   const handleToggleZoomLens = useCallback(async () => {
     if (Platform.OS !== 'web' || facing === 'front') return;
@@ -1140,7 +1143,7 @@ const styles = StyleSheet.create({
   footerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justify.content: 'space-between',
     marginTop: 6,
   },
   footerItem: {
