@@ -1,0 +1,30 @@
+lovevault-mobile/
+├── App.tsx                        # Root Component, Navigation Stack & QueryClientProvider
+├── app.json                       # Cấu hình Expo SDK
+├── package.json                   # Khai báo dependencies (React Navigation, React Query, Zustand...)
+├── tsconfig.json
+└── src/
+    ├── services/                  # Tầng giao tiếp dữ liệu & Hạ tầng
+    │   ├── api.ts                 # Axios Client (Kết nối IP LAN 192.168.1.16:3000, tự chèn JWT & X-Timezone)
+    │   └── storage.ts             # AsyncStorage Wrapper kết hợp In-Memory Cache (Đọc Token đồng bộ)
+    │
+    ├── store/                     # Quản lý Trạng thái Global (Zustand)
+    │   └── useAuthStore.ts        # Auth State (Token, User Info, coupleId & tự động khôi phục phiên)
+    │
+    ├── hooks/                     # Custom Hooks
+    │   └── useRealtimeDayCounter.ts # Tính chính xác số ngày yêu theo múi giờ thiết bị (Luxon)
+    │
+    ├── utils/                     # Tiện ích dùng chung
+    │   └── error.ts               # Parse lỗi từ NestJS Validation (Ép kiểu mảng/object về String an toàn)
+    │
+    └── screens/                   # Giao diện các Màn hình
+        ├── LoginScreen.tsx        # Màn hình Đăng nhập
+        ├── RegisterScreen.tsx     # Màn hình Đăng ký tài khoản
+        ├── PairingScreen.tsx      # Màn hình Tạo & Nhập mã ghép đôi 6 chữ số
+        └── HomeScreen.tsx         # Màn hình Đếm ngày yêu chính
+modals/
+    ├── modalConstantsAndUtils.ts     <-- Hằng số (MOOD_LIST, TRANSPORT_OPTIONS...) & hàm xử lý ngày/giờ
+    ├── modalSharedStyles.ts          <-- StyleSheet dùng chung cho các Bottom Sheet & Form
+    ├── ProfileModal.tsx              <-- Modal 1: Hồ sơ cặp đôi, Phiếu hẹn 2 ngăn & Ghi chú riêng
+    ├── SettingsModal.tsx             <-- Modal 2: Tùy chỉnh phòng, Quỹ MoMo, Giao diện & Sao lưu
+    └── EventAndGoalFormModal.tsx     <-- Modal 3: Lập lịch đi chơi (Vertical Stepper), Sự kiện & Mục tiêu
