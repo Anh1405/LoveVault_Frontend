@@ -92,7 +92,33 @@ const PAGE_SWITCH_PADDING = 3;
 
 const locketSnapKeyExtractor = (snap: { id: string }) => snap.id;
 
+// Web: MediaLibrary và FileSystem không dùng được, nên tải qua blob + thẻ <a download>
+const downloadMediaOnWeb = async (mediaItem: CoupleMediaItem) => {
+  const url = mediaItem.remoteUrl || mediaItem.uri;
+  const ext = mediaItem.mediaType === 'VIDEO' ? 'mp4' : 'jpg';
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = `lovevault_${Date.now()}.${ext}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
+  } catch (error) {
+    console.warn('Tải trực tiếp thất bại (thường do CORS), mở tab mới:', error);
+    window.open(url, '_blank', 'noopener');
+  }
+};
+
 const handleDownloadMedia = async (mediaItem: CoupleMediaItem) => {
+  if (Platform.OS === 'web') {
+    await downloadMediaOnWeb(mediaItem);
+    return;
+  }
   try {
     const { status } = await MediaLibrary.requestPermissionsAsync(true);
     if (status !== 'granted') {
@@ -107,7 +133,8 @@ const handleDownloadMedia = async (mediaItem: CoupleMediaItem) => {
 
     if (targetUri.startsWith('http://') || targetUri.startsWith('https://')) {
       const ext = mediaItem.mediaType === 'VIDEO' ? 'mp4' : 'jpg';
-      const fileUri = `${FileSystem.documentDirectory}lovevault_media_${Date.now()}.${ext}`;
+      const baseDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory;
+      const fileUri = `${baseDir}lovevault_media_${Date.now()}.${ext}`;
       const downloadRes = await FileSystem.downloadAsync(targetUri, fileUri);
       targetUri = downloadRes.uri;
     }
