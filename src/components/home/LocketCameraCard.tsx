@@ -262,29 +262,35 @@ const ShutterButton = memo(function ShutterButton({
 });
 
 /* ------------------------------------------------------------------ */
-/* Xử lý chống bị zoom (crop 16:9) cho cả Web và Native                  */
+/* Xử lý chống bị zoom (crop 16:9 / chọn nhầm cam) trên Web & Mobile     */
 /* ------------------------------------------------------------------ */
-/**
- * Nguyên nhân khiến hình trong camera bị "phóng bự / zoom sát mặt":
- * 1. Mặc định trình duyệt Web hoặc CameraView mở luồng video 16:9 (VD: 1920x1080).
- *    Khi nhét luồng 16:9 vào khung vuông 1:1 (object-fit: cover), 2 bên bị cắt mất 44%,
- *    làm hình ảnh ở giữa bị phóng to lên gần 1.8 lần.
- * 2. Giải pháp:
- *    - Yêu cầu cảm biến trả về khung hình 4:3 chuẩn gốc của cảm biến ảnh (예: 1440x1080 hoặc 1280x960)
- *      thay vì 16:9 bị crop sẵn.
- *    - Đặt mức zoom phần cứng về mức nhỏ nhất (caps.zoom.min).
- *    - Trên Native, render CameraView theo tỷ lệ 4:3 bên trong khung vuông overflow: hidden
- *      để lấy trọn vẹn chiều rộng góc nhìn của ống kính, tuyệt đối không bị phóng đại.
- */
-async function normalizeWebCameraWideFOV(facingMode: CameraType) {
+interface WebLensResult {
+  backLenses: MediaDeviceInfo[];
+  activeDeviceId: string | null;
+  activeLabel: string;
+}
+
+async function normalizeWebCameraWideFOV(
+  facingMode: CameraType,
+  preferredDeviceId?: string | null,
+): Promise<WebLensResult> {
+  const emptyResult: WebLensResult = {
+    backLenses: [],
+    activeDeviceId: null,
+    activeLabel: '1x',
+  };
+
   if (Platform.OS !== 'web' || typeof document === 'undefined' || !navigator?.mediaDevices) {
-    return;
+    return emptyResult;
   }
+
+  // Đợi 250ms để expo-camera hoàn tất việc gán srcObject mặc định
+  await new Promise((r) => setTimeout(r, 250));
 
   try {
     const videos = Array.from(document.querySelectorAll('video'));
     const activeVideo = videos.find((v) => v.srcObject instanceof MediaStream);
-    if (!activeVideo) return;
+    if (!activeVideo) return emptyResult;
 
     activeVideo.style.objectFit = 'cover';
     activeVideo.style.width = '100%';
@@ -293,37 +299,41 @@ async function normalizeWebCameraWideFOV(facingMode: CameraType) {
 
     const currentStream = activeVideo.srcObject as MediaStream | null;
     let currentTrack = currentStream?.getVideoTracks?.()[0];
+    let backCams: MediaDeviceInfo[] = [];
 
-    // Ở camera sau, đảm bảo chọn ống kính góc rộng (Main/Wide) chứ không phải ống kính Tele 2x
-    if (facingMode === 'back' && navigator.mediaDevices.enumerateDevices) {
+    if (navigator.mediaDevices.enumerateDevices) {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoDevices = devices.filter((d) => d.kind === 'videoinput');
 
-      const preferredMainCam =
-        videoDevices.find(
-          (d) =>
-            /(wide|ultra|main|primary|0)/i.test(d.label) &&
-            !/(tele|zoom|macro|depth)/i.test(d.label),
-        ) ||
-        videoDevices.find(
-          (d) =>
-            /(back|rear|environment|sau)/i.test(d.label) &&
-            !/(tele|zoom|macro|depth)/i.test(d.label),
-        ) ||
-        videoDevices[0];
+      backCams = videoDevices.filter(
+        (d) =>
+          /(back|rear|environment|sau)/i.test(d.label) &&
+          !/(tele|macro|depth|mono)/i.test(d.label),
+      );
+      if (backCams.length === 0 && videoDevices.length > 1) {
+        backCams = videoDevices.slice(1);
+      }
+    }
+
+    if (facingMode === 'back' && backCams.length > 0) {
+      // Nếu người dùng chủ động chọn 1 ống kính (ví dụ bấm nút 0.5x / 1x) thì ưu tiên ống kính đó
+      // Nếu chưa chọn, ưu tiên ống kính Ultra-Wide / Wide góc rộng nhất
+      const targetCam =
+        (preferredDeviceId && backCams.find((d) => d.deviceId === preferredDeviceId)) ||
+        backCams.find((d) => /(ultra|0\.5|wide)/i.test(d.label)) ||
+        backCams.find((d) => / 0 /.test(d.label)) ||
+        backCams[0];
 
       const currentDeviceId = currentTrack?.getSettings?.().deviceId;
 
-      if (preferredMainCam && currentDeviceId && preferredMainCam.deviceId !== currentDeviceId) {
+      if (targetCam && targetCam.deviceId && targetCam.deviceId !== currentDeviceId) {
         const newStream = await navigator.mediaDevices.getUserMedia({
           audio: false,
           video: {
-            deviceId: { exact: preferredMainCam.deviceId },
-            // Cảm biến điện thoại có tỷ lệ vật lý là 4:3 (1.333) -> lấy toàn bộ diện tích cảm biến, không bị crop
-            aspectRatio: { ideal: 1.333333 },
-            width: { ideal: 1280 },
-            height: { ideal: 960 },
-          },
+            deviceId: { exact: targetCam.deviceId },
+            // Không ép width: 1280, height: 960 nằm ngang để tránh bị crop 2 bên khi cầm dọc điện thoại
+            resizeMode: { ideal: 'none' },
+          } as MediaTrackConstraints,
         });
         currentStream?.getTracks().forEach((t) => t.stop());
         activeVideo.srcObject = newStream;
@@ -332,24 +342,32 @@ async function normalizeWebCameraWideFOV(facingMode: CameraType) {
       }
     }
 
+    // Hạ zoom phần cứng về mức thấp nhất (1x hoặc 0.5x) và tắt crop tự động
     if (currentTrack && typeof currentTrack.applyConstraints === 'function') {
       const caps = (currentTrack.getCapabilities?.() || {}) as Record<string, any>;
       const advanced: Record<string, any> = {};
 
-      if (caps.zoom) {
-        // Đưa về mức zoom nhỏ nhất mà ống kính hỗ trợ (1.0x hoặc 0.5x)
-        advanced.zoom = caps.zoom.min ?? 1;
+      if (caps.zoom && typeof caps.zoom.min === 'number') {
+        advanced.zoom = caps.zoom.min;
       }
 
       await currentTrack.applyConstraints({
-        aspectRatio: { ideal: 1.333333 },
-        width: { ideal: 1280 },
-        height: { ideal: 960 },
+        resizeMode: 'none',
         ...(Object.keys(advanced).length > 0 ? { advanced: [advanced] } : {}),
-      } as MediaTrackConstraints);
+      } as any);
     }
+
+    const finalDeviceId = currentTrack?.getSettings?.().deviceId || null;
+    const matchedCam = backCams.find((d) => d.deviceId === finalDeviceId);
+    const isUltra = matchedCam ? /(ultra|0\.5|wide angle|camera2 2)/i.test(matchedCam.label) : false;
+
+    return {
+      backLenses: backCams,
+      activeDeviceId: finalDeviceId,
+      activeLabel: isUltra ? '0.5x' : '1x',
+    };
   } catch {
-    // Bỏ qua nếu trình duyệt không hỗ trợ đổi constraints
+    return emptyResult;
   }
 }
 
@@ -388,6 +406,11 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   const [isSending, setIsSending] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
+
+  // Danh sách ống kính sau trên Web (để đổi nhanh 0.5x / 1x nếu máy có nhiều cam sau)
+  const [webBackLenses, setWebBackLenses] = useState<MediaDeviceInfo[]>([]);
+  const [activeWebLensId, setActiveWebLensId] = useState<string | null>(null);
+  const [webZoomBadge, setWebZoomBadge] = useState<string>('1x');
 
   const initialStampText = useMemo(() => {
     if (myProfile.customStatusText) return myProfile.customStatusText;
@@ -499,9 +522,30 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   const handleCameraReady = useCallback(() => {
     setIsCameraReady(true);
     if (Platform.OS === 'web') {
-      void normalizeWebCameraWideFOV(facing);
+      void normalizeWebCameraWideFOV(facing, activeWebLensId).then((res) => {
+        if (res.backLenses.length > 0) setWebBackLenses(res.backLenses);
+        if (res.activeDeviceId) setActiveWebLensId(res.activeDeviceId);
+        setWebZoomBadge(res.activeLabel);
+      });
     }
-  }, [facing]);
+  }, [facing, activeWebLensId]);
+
+  // Cho phép đổi qua lại giữa các ống kính sau (0.5x Ultra-Wide / 1x Wide) trên trình duyệt Web
+  const handleCycleWebLens = useCallback(async () => {
+    if (Platform.OS !== 'web' || webBackLenses.length < 2) return;
+    void Haptics.selectionAsync().catch(() => {});
+    const currentIndex = webBackLenses.findIndex((d) => d.deviceId === activeWebLensId);
+    const nextLens = webBackLenses[(currentIndex + 1) % webBackLenses.length];
+    if (!nextLens) return;
+
+    const res = await normalizeWebCameraWideFOV('back', nextLens.deviceId);
+    if (res.activeDeviceId) setActiveWebLensId(res.activeDeviceId);
+    setWebZoomBadge(
+      res.activeLabel === '1x' && (currentIndex + 1) % webBackLenses.length !== 0
+        ? '0.5x'
+        : res.activeLabel,
+    );
+  }, [webBackLenses, activeWebLensId]);
 
   const handleMountError = useCallback((e: { message?: string }) => {
     setIsCameraReady(false);
@@ -513,6 +557,40 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     try {
       setIsCapturing(true);
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+      // Trên Web: nếu đã đổi sang stream góc rộng tùy chỉnh, chụp trực tiếp từ thẻ <video>
+      // để bức ảnh lưu ra giữ nguyên đúng góc rộng đang hiển thị trên màn hình
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        const videos = Array.from(document.querySelectorAll('video'));
+        const activeVideo = videos.find(
+          (v) => v.srcObject instanceof MediaStream && v.videoWidth > 0,
+        );
+        if (activeVideo) {
+          const vw = activeVideo.videoWidth;
+          const vh = activeVideo.videoHeight;
+          const side = Math.min(vw, vh);
+          const sx = Math.floor((vw - side) / 2);
+          const sy = Math.floor((vh - side) / 2);
+
+          const canvas = document.createElement('canvas');
+          canvas.width = side;
+          canvas.height = side;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            if (facing === 'front') {
+              ctx.translate(side, 0);
+              ctx.scale(-1, 1);
+            }
+            ctx.drawImage(activeVideo, sx, sy, side, side, 0, 0, side, side);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+            if (dataUrl) {
+              setPreviewUri(dataUrl);
+              return;
+            }
+          }
+        }
+      }
+
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.85,
         skipProcessing: false,
@@ -525,7 +603,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     } finally {
       setIsCapturing(false);
     }
-  }, [isCapturing, isCameraReady]);
+  }, [isCapturing, isCameraReady, facing]);
 
   const handleRetake = useCallback(() => {
     void Haptics.selectionAsync().catch(() => {});
@@ -604,7 +682,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         </View>
       </View>
 
-      {/* Khung camera chuẩn Locket: tràn rộng sát lề, bo góc 46px mượt mà, góc nhìn 4:3 không bị zoom */}
+      {/* Khung camera chuẩn Locket: tràn rộng sát lề, bo góc 46px mượt mà, góc nhìn rộng không bị zoom */}
       <View
         style={[
           styles.viewport,
@@ -691,21 +769,37 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
           </View>
         )}
 
-        {/* Lớp phủ phía trên: Flash bên trái giống Locket gốc, nhãn trạng thái bên phải */}
+        {/* Lớp phủ phía trên: Flash (+ nút đổi ống kính 0.5x/1x trên Web) bên trái, nhãn trạng thái bên phải */}
         {granted && (
           <View style={styles.overlayTop} pointerEvents="box-none">
-            {showCameraChrome ? (
-              <GlassButton onPress={handleFlashCycle} label={FLASH_LABEL[flash]}>
-                <FlashIcon mode={flash} size={22} />
-              </GlassButton>
-            ) : (
-              <View style={{ width: 42, height: 42 }} />
-            )}
+            <View style={styles.topLeftGroup} pointerEvents="box-none">
+              {showCameraChrome ? (
+                <GlassButton onPress={handleFlashCycle} label={FLASH_LABEL[flash]}>
+                  <FlashIcon mode={flash} size={22} />
+                </GlassButton>
+              ) : (
+                <View style={{ width: 42, height: 42 }} />
+              )}
+
+              {showCameraChrome &&
+                Platform.OS === 'web' &&
+                facing === 'back' &&
+                webBackLenses.length > 1 && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Đổi góc ống kính 0.5x hoặc 1x"
+                    onPress={() => void handleCycleWebLens()}
+                    style={({ pressed }) => [styles.lensBadgeBtn, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.lensBadgeText}>{webZoomBadge}</Text>
+                  </Pressable>
+                )}
+            </View>
 
             <View
               style={[
                 styles.stampBadge,
-                { backgroundColor: colors.primary, maxWidth: viewportSize - 16 * 2 - 42 - 10 },
+                { backgroundColor: colors.primary, maxWidth: viewportSize - 16 * 2 - 96 },
               ]}
               pointerEvents="none"
             >
@@ -956,6 +1050,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  topLeftGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  lensBadgeBtn: {
+    height: 38,
+    minWidth: 42,
+    paddingHorizontal: 10,
+    borderRadius: 19,
+    backgroundColor: GLASS,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  lensBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
   },
   stampBadge: {
     paddingHorizontal: 13,
