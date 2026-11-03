@@ -10,6 +10,8 @@ import type {
   LocketSnapItem,
 } from '../hooks/useCoupleWorkspace';
 import { Platform } from 'react-native';
+import * as VideoThumbnails from 'expo-video-thumbnails';
+import * as ImageManipulator from 'expo-image-manipulator';
 export type CloudMediaCategory = 'ALBUM_MEDIA' | 'LOCKET_SNAP' | 'TIME_CAPSULE';
 export type CloudMediaType = 'IMAGE' | 'VIDEO';
 
@@ -158,6 +160,48 @@ export const enqueuePendingMediaUpload = async (
 export const uploadMediaToCloudAndSaveDb = async (
   input: UploadMediaInput,
 ): Promise<CloudMediaRecord> => {
+  let uploadUri = input.localUri;
+  let thumbnailUrl: string | undefined = undefined;
+
+  // 1. Nếu là VIDEO: Tạo thumbnail từ localUri và upload thumbnail trước
+  if (input.mediaType === 'VIDEO' && Platform.OS !== 'web') {
+    try {
+      const { uri: thumbLocalUri } = await VideoThumbnails.getThumbnailAsync(input.localUri, {
+        time: 1000,
+      });
+      // Upload ảnh thumbnail này lên Cloud (gọi đệ quy với mediaType = IMAGE)
+      const thumbRecord = await uploadMediaToCloudAndSaveDb({
+        localUri: thumbLocalUri,
+        category: input.category,
+        mediaType: 'IMAGE',
+        caption: 'thumbnail',
+      });
+      thumbnailUrl = thumbRecord.remoteUrl;
+    } catch (e) {
+      console.warn('Không thể tạo thumbnail cho video:', e);
+    }
+  }
+
+  // 2. Nếu là IMAGE: Nén giảm kích thước ảnh xuống tối đa 1920px để tối ưu dung lượng
+  if (
+    input.mediaType === 'IMAGE' &&
+    Platform.OS !== 'web' &&
+    !uploadUri.startsWith('http') &&
+    !uploadUri.startsWith('blob:') &&
+    !uploadUri.startsWith('data:')
+  ) {
+    try {
+      const manipResult = await ImageManipulator.manipulateAsync(
+        uploadUri,
+        [{ resize: { width: 1920 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      uploadUri = manipResult.uri;
+    } catch (e) {
+      console.warn('Không thể nén ảnh:', e);
+    }
+  }
+
   const isVideo = input.mediaType === 'VIDEO';
   const ext = isVideo ? 'mp4' : 'jpg';
   const contentType = isVideo ? 'video/mp4' : 'image/jpeg';
@@ -169,7 +213,7 @@ export const uploadMediaToCloudAndSaveDb = async (
 
   for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
     try {
-      // Bước 1: Xin Presigned URL từ BackendLoveVault (/api/v1/media/presigned-url)
+      // Bước 1: Xin Presigned URL từ Backend (/api/v1/media/presigned-url)
       const { data: presigned } = await api.post<{
         uploadUrl: string;
         fileKey: string;
@@ -180,9 +224,9 @@ export const uploadMediaToCloudAndSaveDb = async (
         contentType,
       });
 
-      // Bước 2: Đẩy luồng nhị phân trực tiếp lên S3 / Cloudflare R2 (Hỗ trợ cả Web & Mobile)
-      if (Platform.OS === 'web' || input.localUri.startsWith('blob:') || input.localUri.startsWith('data:')) {
-        const fileResponse = await fetch(input.localUri);
+      // Bước 2: Đẩy luồng nhị phân trực tiếp lên S3 / Cloudflare R2 (dùng uploadUri đã nén)
+      if (Platform.OS === 'web' || uploadUri.startsWith('blob:') || uploadUri.startsWith('data:')) {
+        const fileResponse = await fetch(uploadUri);
         const fileBlob = await fileResponse.blob();
         const putRes = await fetch(presigned.uploadUrl, {
           method: 'PUT',
@@ -197,7 +241,7 @@ export const uploadMediaToCloudAndSaveDb = async (
       } else {
         const uploadRes = await FileSystem.uploadAsync(
           presigned.uploadUrl,
-          input.localUri,
+          uploadUri,
           {
             httpMethod: 'PUT',
             uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
@@ -216,7 +260,7 @@ export const uploadMediaToCloudAndSaveDb = async (
 
       const finalRemoteUrl = presigned.remoteUrl || presigned.publicUrl;
 
-      // Bước 3: Lưu remoteUrl và metadata vào PostgreSQL qua Prisma kèm idempotencyKey
+      // Bước 3: Lưu remoteUrl và metadata vào PostgreSQL qua Prisma kèm idempotencyKey & thumbnailUrl
       const { data: savedRecord } = await api.post<CloudMediaRecord>(
         '/api/v1/media/confirm',
         {
@@ -224,6 +268,7 @@ export const uploadMediaToCloudAndSaveDb = async (
           mediaType: input.mediaType,
           fileKey: presigned.fileKey,
           remoteUrl: finalRemoteUrl,
+          thumbnailUrl,
           caption: input.caption || undefined,
           stamp: input.stamp || undefined,
           durationSec: input.durationSec,

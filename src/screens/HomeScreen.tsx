@@ -25,6 +25,7 @@ import {
   AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Image as ExpoImage } from 'expo-image';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import * as Haptics from 'expo-haptics';
@@ -137,6 +138,7 @@ const InlineVideoPlayer: React.FC<{ uri: string }> = ({ uri }) => {
   );
 };
 
+
 const MediaCardItem = React.memo(({
   item,
   colors,
@@ -147,55 +149,31 @@ const MediaCardItem = React.memo(({
   onSelect: (item: CoupleMediaItem) => void;
 }) => {
   const effectiveUri = item.remoteUrl || item.uri;
-  const [thumbUri, setThumbUri] = useState<string | null>(item.thumbnailUri || null);
-
-  useEffect(() => {
-    if (item.mediaType === 'VIDEO' && !item.thumbnailUri && !thumbUri && effectiveUri) {
-      let isMounted = true;
-      VideoThumbnails.getThumbnailAsync(effectiveUri, { time: 2000 })
-        .then((res) => {
-          if (isMounted && res.uri) {
-            setThumbUri(res.uri);
-          }
-        })
-        .catch(() => null);
-      return () => {
-        isMounted = false;
-      };
-    }
-  }, [item.mediaType, effectiveUri, item.thumbnailUri, thumbUri]);
+  // Dùng thumbnailUri nếu là video, nếu không có thì fallback sang URL gốc
+  const displayUri = item.mediaType === 'VIDEO' ? (item.thumbnailUri || effectiveUri) : effectiveUri;
 
   return (
     <Pressable
       style={[styles.mediaCard, { backgroundColor: colors.mediaCardBg }]}
       onPress={() => onSelect(item)}
     >
-      {item.mediaType === 'IMAGE' ? (
-        <Image
-          source={{ uri: effectiveUri }}
-          style={styles.mediaThumbImage}
-          resizeMode="cover"
-        />
-      ) : (
-        <>
-          {thumbUri ? (
-            <Image
-              source={{ uri: thumbUri }}
-              style={styles.mediaThumbImage}
-              resizeMode="cover"
-            />
-          ) : (
-            <View style={[styles.mediaThumbImage, { backgroundColor: '#0F172A' }]} />
-          )}
-          <View style={styles.videoOverlayContainer}>
-            <View style={[styles.playCircle, { backgroundColor: colors.primary }]}>
-              <Text style={{ color: '#FFF', fontSize: 14 }}>▶</Text>
-            </View>
-            {item.durationSec !== undefined && (
-              <Text style={styles.durationTag}>{item.durationSec}s</Text>
-            )}
+      <ExpoImage
+        source={{ uri: displayUri }}
+        style={styles.mediaThumbImage}
+        contentFit="cover"
+        transition={200}
+        cachePolicy="memory-disk" // Tối ưu cache hình ảnh vào đĩa & bộ nhớ RAM
+      />
+
+      {item.mediaType === 'VIDEO' && (
+        <View style={styles.videoOverlayContainer}>
+          <View style={[styles.playCircle, { backgroundColor: colors.primary }]}>
+            <Text style={{ color: '#FFF', fontSize: 14 }}>▶</Text>
           </View>
-        </>
+          {item.durationSec !== undefined && (
+            <Text style={styles.durationTag}>{item.durationSec}s</Text>
+          )}
+        </View>
       )}
 
       <View style={styles.mediaFooterOverlay}>
@@ -2290,19 +2268,23 @@ export const HomeScreen = () => {
                   </View>
                 ) : (
                   <FlatList
-                    data={filteredMediaList}
-                    keyExtractor={(item) => item.id}
-                    scrollEnabled={false}
-                    numColumns={2}
-                    columnWrapperStyle={{ justifyContent: 'space-between' }}
-                    renderItem={({ item }) => (
-                      <MediaCardItem
-                        item={item}
-                        colors={colors}
-                        onSelect={setSelectedMedia}
-                      />
-                    )}
-                  />
+  data={filteredMediaList}
+  keyExtractor={(item) => item.id}
+  scrollEnabled={false}
+  numColumns={2}
+  columnWrapperStyle={{ justifyContent: 'space-between' }}
+  initialNumToRender={6}       // Chỉ render 6 ảnh/video đầu tiên khi mở tab
+  maxToRenderPerBatch={6}      // Mỗi đợt chỉ render thêm tối đa 6 mục
+  windowSize={5}               // Giảm dung lượng vùng nhớ đệm xung quanh viewport
+  removeClippedSubviews={Platform.OS === 'android'} // Giải phóng bộ nhớ các item ngoài màn hình trên Android
+  renderItem={({ item }) => (
+    <MediaCardItem
+      item={item}
+      colors={colors}
+      onSelect={setSelectedMedia}
+    />
+  )}
+/>
                 )}
               </View>
             )}
