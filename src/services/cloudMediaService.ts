@@ -9,7 +9,7 @@ import type {
   CoupleMediaItem,
   LocketSnapItem,
 } from '../hooks/useCoupleWorkspace';
-
+import { Platform } from 'react-native';
 export type CloudMediaCategory = 'ALBUM_MEDIA' | 'LOCKET_SNAP' | 'TIME_CAPSULE';
 export type CloudMediaType = 'IMAGE' | 'VIDEO';
 
@@ -180,23 +180,38 @@ export const uploadMediaToCloudAndSaveDb = async (
         contentType,
       });
 
-      // Bước 2: Đẩy luồng nhị phân trực tiếp từ bộ nhớ máy lên S3 / Cloudflare R2
-      const uploadRes = await FileSystem.uploadAsync(
-        presigned.uploadUrl,
-        input.localUri,
-        {
-          httpMethod: 'PUT',
-          uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      // Bước 2: Đẩy luồng nhị phân trực tiếp lên S3 / Cloudflare R2 (Hỗ trợ cả Web & Mobile)
+      if (Platform.OS === 'web' || input.localUri.startsWith('blob:') || input.localUri.startsWith('data:')) {
+        const fileResponse = await fetch(input.localUri);
+        const fileBlob = await fileResponse.blob();
+        const putRes = await fetch(presigned.uploadUrl, {
+          method: 'PUT',
           headers: {
             'Content-Type': contentType,
           },
-        },
-      );
-
-      if (uploadRes.status < 200 || uploadRes.status >= 300) {
-        throw new Error(
-          `S3/R2 trả về mã lỗi HTTP ${uploadRes.status} khi tải tệp lên.`,
+          body: fileBlob,
+        });
+        if (!putRes.ok) {
+          throw new Error(`S3/R2 trả về mã lỗi HTTP ${putRes.status} khi tải tệp lên.`);
+        }
+      } else {
+        const uploadRes = await FileSystem.uploadAsync(
+          presigned.uploadUrl,
+          input.localUri,
+          {
+            httpMethod: 'PUT',
+            uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+            headers: {
+              'Content-Type': contentType,
+            },
+          },
         );
+
+        if (uploadRes.status < 200 || uploadRes.status >= 300) {
+          throw new Error(
+            `S3/R2 trả về mã lỗi HTTP ${uploadRes.status} khi tải tệp lên.`,
+          );
+        }
       }
 
       const finalRemoteUrl = presigned.remoteUrl || presigned.publicUrl;
@@ -239,9 +254,11 @@ export const flushPendingCloudMediaQueue = async (): Promise<CloudMediaRecord[]>
 
   for (const item of queue) {
     try {
-      const info = await FileSystem.getInfoAsync(item.localUri);
-      if (!info.exists) {
-        continue;
+      if (Platform.OS !== 'web' && !item.localUri.startsWith('blob:') && !item.localUri.startsWith('data:')) {
+        const info = await FileSystem.getInfoAsync(item.localUri);
+        if (!info.exists) {
+          continue;
+        }
       }
       const record = await uploadMediaToCloudAndSaveDb(item);
       syncedRecords.push(record);

@@ -188,9 +188,10 @@ function sanitizeRemoteRoomPayload(remote: any) {
     delete next.heroWallpaperUri;
   }
 
-  if (next.membersById && typeof next.membersById === 'object') {
+  const rawMap = next.membersById || next.profiles;
+  if (rawMap && typeof rawMap === 'object') {
     const cleanMembers: Record<string, any> = {};
-    for (const [uid, prof] of Object.entries(next.membersById)) {
+    for (const [uid, prof] of Object.entries(rawMap)) {
       if (prof && typeof prof === 'object') {
         const { avatarUri, ...rest } = prof as any;
         cleanMembers[uid] = isRemoteUrl(avatarUri) ? { ...rest, avatarUri } : rest;
@@ -199,6 +200,7 @@ function sanitizeRemoteRoomPayload(remote: any) {
       }
     }
     next.membersById = cleanMembers;
+    next.profiles = cleanMembers;
   }
 
   return next;
@@ -405,7 +407,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
     if (syncServer && s.activeCoupleId) {
       api
-        .patch('/api/v1/couples/shared-settings', sharedPayload)
+        .patch('/api/v1/couples/shared-settings', {
+          coupleId: s.activeCoupleId,
+          ...sharedPayload,
+          sharedSettings: {
+            ...sharedPayload,
+            profiles: s.membersById,
+          },
+        })
         .catch(() => null);
     }
   };
@@ -616,15 +625,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
       set((state) => {
         const mergedMembers: Record<string, PersonProfile> = { ...state.membersById };
-        const remoteMembers = sharedRoomPayload?.membersById || {};
+        const remoteMembers =
+          sharedRoomPayload?.membersById || sharedRoomPayload?.profiles || {};
 
-        // 1. Cập nhật dữ liệu mới từ Server đè/gộp vào Local (bao gồm birthDate, nickname, avatar, status)
+        // 1. Cập nhật dữ liệu mới từ Server vào Local nhưng GIỮ LẠI avatarUri của mình nếu server chưa có
         for (const [uid, remoteProf] of Object.entries(remoteMembers)) {
           if (remoteProf && typeof remoteProf === 'object') {
+            const prevProf = mergedMembers[uid];
+            const remoteTyped = remoteProf as Partial<PersonProfile>;
             mergedMembers[uid] = {
               ...DEFAULT_MY_PROFILE,
-              ...(mergedMembers[uid] || {}),
-              ...(remoteProf as Partial<PersonProfile>),
+              ...(prevProf || {}),
+              ...remoteTyped,
+              // Nếu là chính mình và trên máy đang có ảnh mà server trả về null/rỗng -> giữ nguyên ảnh trên máy!
+              avatarUri:
+                remoteTyped.avatarUri ||
+                (String(uid) === String(userId) ? prevProf?.avatarUri || state.myProfile.avatarUri : prevProf?.avatarUri) ||
+                null,
               userId: uid,
             };
           }
@@ -657,7 +674,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           userId,
           nickname:
             isGenericMyName && myFullName ? myFullName.trim() : existingMe.nickname || 'Bạn',
-          avatarUri: existingMe.avatarUri || myAvatarUrl || null,
+          avatarUri: existingMe.avatarUri || state.myProfile.avatarUri || myAvatarUrl || null,
         };
 
         // 4. Định vị chính xác ID của Partner
@@ -705,14 +722,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           finalPartnerKey,
         );
 
+        // CHỈ cập nhật heroWallpaperUri từ server nếu nó thực sự là link hợp lệ,
+        // KHÔNG lấy giá trị null/undefined từ server đè mất ảnh người dùng vừa chọn trên máy
+        const nextHeroWallpaperUri = isRemoteUrl(sharedRoomPayload?.heroWallpaperUri)
+  ? sharedRoomPayload.heroWallpaperUri
+  : state.heroWallpaperUri;
+
         return {
           activeUserId: userId,
           activeCoupleId: targetCoupleId,
           membersById: mergedMembers,
-          heroWallpaperUri:
-            sharedRoomPayload?.heroWallpaperUri !== undefined
-              ? sharedRoomPayload.heroWallpaperUri
-              : state.heroWallpaperUri,
+          heroWallpaperUri: nextHeroWallpaperUri,
           themePreset: sharedRoomPayload?.themePreset || state.themePreset,
           momoFund: sharedRoomPayload?.momoFund
             ? { ...state.momoFund, ...sharedRoomPayload.momoFund }
@@ -732,8 +752,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       const { activeCoupleId, activeUserId } = get();
       if (!activeCoupleId || pendingLocalWrites > 0) return;
       try {
-        const res = await api.get('/api/v1/couples/shared-settings');
-        const remote = res.data?.settings || res.data;
+        const res = await api.get('/api/v1/couples/shared-settings', {
+          params: { coupleId: activeCoupleId },
+        });
+        const remote = res.data?.sharedSettings || res.data?.settings || res.data;
         if (remote && typeof remote === 'object') {
           await get().syncIdentityFromAuth({
             userId: activeUserId || '',
@@ -742,7 +764,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           });
         }
       } catch {
-        await get().hydrateSettings(activeUserId, activeCoupleId);
+        // Không gọi hydrateSettings ở đây khi rớt mạng để tránh đọc lại cache cũ đè lên state mới
       }
     },
 

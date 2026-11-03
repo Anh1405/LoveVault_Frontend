@@ -69,6 +69,11 @@ import {
 
 type DashboardSection = 'EVENTS' | 'GOALS' | 'DAILY_QA' | 'MEDIA';
 
+const toLocalIsoDate = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate(),
+  ).padStart(2, '0')}`;
+
 const getAnniversaryCacheKey = (coupleId?: string | null, userId?: string | null) =>
   `lovevault_anniversary_override_v2_${coupleId || userId || 'guest'}`;
 
@@ -349,18 +354,33 @@ export const HomeScreen = () => {
   ]);
 
   // Lưu bản sao từ Cloud xuống Local Storage để xem ngoại tuyến khi mất mạng
+  // Thay thế dòng 296-306 trong HomeScreen.tsx bằng đoạn kiểm tra an toàn này:
   useEffect(() => {
-    if (!cloudMediaPayload) return;
+    if (!cloudMediaPayload || uploadingMedia) return;
+    const hasCloudAlbum =
+      Array.isArray(cloudMediaPayload.albumMedia) && cloudMediaPayload.albumMedia.length > 0;
+    const hasCloudLocket =
+      Array.isArray(cloudMediaPayload.locketSnaps) && cloudMediaPayload.locketSnaps.length > 0;
+
+    // Chỉ cập nhật backup khi số lượng sau khi gộp >= số lượng hiện tại trên máy (không bao giờ làm giảm/mất ảnh)
     if (
-      (cloudMediaPayload.albumMedia && cloudMediaPayload.albumMedia.length > 0) ||
-      (cloudMediaPayload.locketSnaps && cloudMediaPayload.locketSnaps.length > 0)
+      (hasCloudAlbum && mergedMediaList.length > mediaList.length) ||
+      (hasCloudLocket && mergedLocketSnaps.length > locketSnaps.length)
     ) {
       void restoreWorkspaceBackup({
         mediaList: mergedMediaList,
         locketSnaps: mergedLocketSnaps,
       });
     }
-  }, [cloudMediaPayload]);
+  }, [
+    cloudMediaPayload,
+    uploadingMedia,
+    mergedMediaList,
+    mergedLocketSnaps,
+    mediaList.length,
+    locketSnaps.length,
+    restoreWorkspaceBackup,
+  ]);
 
   const [momoTxModal, setMomoTxModal] = useState<{
     visible: boolean;
@@ -574,11 +594,15 @@ export const HomeScreen = () => {
   );
 
   useEffect(() => {
-    void hydrateSettings(currentUserId, coupleId);
+    void hydrateSettings(currentUserId, coupleId).then(() => {
+      if (coupleId) {
+        void pullSharedRoomSettingsFromServer();
+      }
+    });
     storage.getItem(anniversaryCacheKey).then((saved) => {
       setCachedAnniversaryIso(saved || null);
     });
-  }, [hydrateSettings, currentUserId, coupleId, anniversaryCacheKey]);
+  }, [hydrateSettings, pullSharedRoomSettingsFromServer, currentUserId, coupleId, anniversaryCacheKey]);
 
   const { data: counterData, isLoading, refetch } = useQuery({
     queryKey: ['dayCounter', coupleId, currentUserId],
@@ -2322,6 +2346,56 @@ export const HomeScreen = () => {
                 maximumDate={new Date()}
                 onChange={onAnnivPickerChange}
               />
+            </View>
+          </View>
+        </Modal>
+      )}
+
+      {Platform.OS === 'web' && (
+        <Modal
+          visible={showAnnivPicker}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowAnnivPicker(false)}
+        >
+          <View style={[styles.iosSheetBackdrop, { backgroundColor: colors.backdrop }]}>
+            <View style={[styles.iosSheetBox, { backgroundColor: colors.surface }]}>
+              <View style={styles.iosSheetHeader}>
+                <Pressable onPress={() => setShowAnnivPicker(false)}>
+                  <Text style={{ color: colors.textSecondary, fontWeight: '600' }}>Hủy</Text>
+                </Pressable>
+                <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>
+                  Ngày bắt đầu
+                </Text>
+                <Pressable
+                  onPress={() => {
+                    setShowAnnivPicker(false);
+                    void handleSaveAnniversary(tempAnnivDate);
+                  }}
+                >
+                  <Text style={{ color: colors.primary, fontWeight: '700' }}>Lưu</Text>
+                </Pressable>
+              </View>
+              {React.createElement('input', {
+                type: 'date',
+                value: toLocalIsoDate(tempAnnivDate),
+                max: toLocalIsoDate(new Date()),
+                onChange: (e: any) => {
+                  const value: string = e?.target?.value || '';
+                  if (!value) return;
+                  const [y, m, d] = value.split('-').map(Number);
+                  if (y && m && d) setTempAnnivDate(new Date(y, m - 1, d));
+                },
+                style: {
+                  margin: 16,
+                  padding: 12,
+                  fontSize: 18,
+                  borderRadius: 12,
+                  border: `1px solid ${colors.textSecondary}`,
+                  backgroundColor: 'transparent',
+                  color: colors.textPrimary,
+                },
+              })}
             </View>
           </View>
         </Modal>

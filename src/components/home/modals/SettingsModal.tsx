@@ -261,7 +261,10 @@ export const SettingsModal: React.FC<{
             Tùy chỉnh phòng chung & Tài khoản
           </Text>
 
+          <View style={{ height: 1, backgroundColor: colors.borderSubtle, marginBottom: 12 }} />
+
           <ScrollView
+            style={Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : undefined}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.scrollContentContainer}
@@ -438,7 +441,10 @@ export const SettingsModal: React.FC<{
                     onChangeText={setNewPassword}
                   />
                   <Pressable
-                    style={[styles.primaryBtn, { backgroundColor: colors.textPrimary }]}
+                    style={[
+                      styles.primaryBtn,
+                      { backgroundColor: colors.textPrimary, flex: 0, alignSelf: 'stretch' },
+                    ]}
                     onPress={handleChangePassword}
                   >
                     <Text style={{ color: colors.surface, fontWeight: '700', fontSize: 13 }}>
@@ -511,7 +517,10 @@ export const SettingsModal: React.FC<{
                   />
 
                   <Pressable
-                    style={[styles.primaryBtn, { backgroundColor: '#A50064' }]}
+                    style={[
+                      styles.primaryBtn,
+                      { backgroundColor: '#A50064', flex: 0, alignSelf: 'stretch' },
+                    ]}
                     onPress={handleSaveMomoConfig}
                   >
                     <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 13 }}>
@@ -539,7 +548,7 @@ export const SettingsModal: React.FC<{
                 Biểu tượng tương tác chung
               </Text>
 
-              <View style={styles.chipWrap}>
+              <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12 }}>
                 {HEART_SKINS.map((skin) => {
                   const active = socialPrefs.heartBoxSkin === skin;
                   return (
@@ -547,7 +556,12 @@ export const SettingsModal: React.FC<{
                       key={skin}
                       style={[
                         styles.heartSkinSettingBtn,
-                        { borderColor: colors.outline, backgroundColor: colors.surfaceVariant },
+                        {
+                          flex: 1,
+                          width: undefined,
+                          borderColor: colors.outline,
+                          backgroundColor: colors.surfaceVariant,
+                        },
                         active && {
                           backgroundColor: colors.primaryContainer,
                           borderColor: colors.primary,
@@ -797,7 +811,13 @@ export const SettingsModal: React.FC<{
                 <Pressable
                   style={[
                     styles.primaryBtn,
-                    { backgroundColor: colors.textPrimary, flex: 0, paddingHorizontal: 18 },
+                    {
+                      backgroundColor: colors.textPrimary,
+                      flex: 0,
+                      flexShrink: 0,
+                      minWidth: 96,
+                      paddingHorizontal: 18,
+                    },
                   ]}
                   onPress={() => {
                     if (pinInput.length === 4) {
@@ -810,7 +830,10 @@ export const SettingsModal: React.FC<{
                     }
                   }}
                 >
-                  <Text style={{ color: colors.surface, fontSize: 13, fontWeight: '600' }}>
+                  <Text
+                    numberOfLines={1}
+                    style={{ color: colors.surface, fontSize: 13, fontWeight: '600' }}
+                  >
                     {pinInput.length === 4 ? 'Lưu' : appPinCode ? 'Tắt khóa' : 'Đặt khóa'}
                   </Text>
                 </Pressable>
@@ -858,7 +881,10 @@ export const SettingsModal: React.FC<{
                     onChangeText={setImportJsonText}
                   />
                   <Pressable
-                    style={[styles.primaryBtn, { backgroundColor: colors.primary }]}
+                    style={[
+                      styles.primaryBtn,
+                      { backgroundColor: colors.primary, flex: 0, alignSelf: 'stretch' },
+                    ]}
                     onPress={handleConfirmImport}
                     disabled={importing}
                   >
@@ -874,7 +900,16 @@ export const SettingsModal: React.FC<{
               )}
 
               <Pressable
-                style={[styles.secondaryBtn, { backgroundColor: colors.errorContainer, flex: 0 }]}
+                style={[
+                  styles.secondaryBtn,
+                  {
+                    backgroundColor: colors.errorContainer,
+                    flex: 0,
+                    marginTop: 16,
+                    borderWidth: 1,
+                    borderColor: colors.error,
+                  },
+                ]}
                 onPress={handleDeleteAccount}
               >
                 <Text style={{ color: colors.error, fontSize: 13, fontWeight: '600' }}>

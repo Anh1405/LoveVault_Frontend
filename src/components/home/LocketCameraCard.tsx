@@ -266,7 +266,78 @@ const ShutterButton = memo(function ShutterButton({
 /* ------------------------------------------------------------------ */
 /* Màn hình chính                                                       */
 /* ------------------------------------------------------------------ */
+/**
+ * Trên Web (Mobile Chrome / Safari), tự động:
+ * 1. Đưa mức phần cứng zoom của track về mức nhỏ nhất / 1x (tránh bị kẹt zoom 2x).
+ * 2. Yêu cầu tỷ lệ khung hình 1:1 từ cảm biến để không bị crop phóng to bởi object-fit: cover.
+ */
+async function normalizeWebCameraStreamTo1x(facingMode: CameraType) {
+  if (Platform.OS !== 'web' || typeof document === 'undefined' || !navigator?.mediaDevices) {
+    return;
+  }
 
+  try {
+    const videos = Array.from(document.querySelectorAll('video'));
+    const activeVideo = videos.find((v) => v.srcObject instanceof MediaStream);
+    if (!activeVideo) return;
+
+    // Đảm bảo thẻ video hiển thị mượt và không bị phóng đại thừa
+    activeVideo.style.objectFit = 'cover';
+    activeVideo.style.transform = facingMode === 'front' ? 'scaleX(-1)' : 'none';
+
+    const currentStream = activeVideo.srcObject as MediaStream | null;
+    const currentTrack = currentStream?.getVideoTracks?.()[0];
+
+    // Nếu đang ở camera sau, kiểm tra danh sách thiết bị để tránh chọn nhầm ống kính Tele / Macro
+    if (facingMode === 'back' && navigator.mediaDevices.enumerateDevices) {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const backCameras = devices.filter(
+        (d) =>
+          d.kind === 'videoinput' &&
+          /(back|rear|environment|sau|0)/i.test(d.label) &&
+          !/(tele|zoom|macro|depth)/i.test(d.label),
+      );
+
+      // Ống kính chính (1x) trên Android/iOS luôn là camera sau đầu tiên trong danh sách chuẩn
+      const preferredMainCam = backCameras[0];
+      const currentDeviceId = currentTrack?.getSettings?.().deviceId;
+
+      if (preferredMainCam && currentDeviceId && preferredMainCam.deviceId !== currentDeviceId) {
+        const newStream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            deviceId: { exact: preferredMainCam.deviceId },
+            aspectRatio: { ideal: 1 },
+            width: { ideal: 1080 },
+            height: { ideal: 1080 },
+          },
+        });
+        currentStream?.getTracks().forEach((t) => t.stop());
+        activeVideo.srcObject = newStream;
+        await activeVideo.play().catch(() => null);
+        return;
+      }
+    }
+
+    // Nếu đã đúng ống kính chính, ép mức zoom phần cứng về 1x và khung hình 1:1
+    if (currentTrack && typeof currentTrack.applyConstraints === 'function') {
+      const caps = (currentTrack.getCapabilities?.() || {}) as Record<string, any>;
+      const advanced: Record<string, any> = {};
+      if (caps.zoom) {
+        advanced.zoom = caps.zoom.min <= 1 && caps.zoom.max >= 1 ? 1 : caps.zoom.min || 1;
+      }
+
+      await currentTrack.applyConstraints({
+        aspectRatio: { ideal: 1 },
+        width: { ideal: 1080 },
+        height: { ideal: 1080 },
+        ...(Object.keys(advanced).length > 0 ? { advanced: [advanced] } : {}),
+      } as MediaTrackConstraints);
+    }
+  } catch {
+    // Bỏ qua nếu trình duyệt chặn quyền enumerateDevices
+  }
+}
 const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   colors,
   isPageActive,
@@ -410,7 +481,10 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 
   const handleCameraReady = useCallback(() => {
     setIsCameraReady(true);
-  }, []);
+    if (Platform.OS === 'web') {
+      void normalizeWebCameraStreamTo1x(facing);
+    }
+  }, [facing]);
 
   const handleMountError = useCallback((e: { message?: string }) => {
     setIsCameraReady(false);
@@ -581,6 +655,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
               style={{ width: viewportSize, height: viewportSize }}
               facing={facing}
               flash={flash}
+               zoom={0}
               mirror={facing === 'front'}
               mode="picture"
               onCameraReady={handleCameraReady}
