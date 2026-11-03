@@ -313,7 +313,7 @@ async function applySafeWebCamera(
           activeVideo.srcObject = newStream;
           await activeVideo.play().catch(() => null);
         } catch {
-          // Bỏ qua lỗi đổi phần cứng để tránh crash app
+          // Bỏ qua lỗi đổi phần cứng
         }
       }
     }
@@ -469,7 +469,9 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 
   const handleFlipCamera = useCallback(() => {
     void Haptics.selectionAsync().catch(() => {});
+    setIsCameraReady(false);
     setCameraError(null);
+    setLensMode('1x'); // Ép trả về góc 1x tiêu chuẩn trước khi lật cam để chuyển nhanh và không nghẽn stream
     setFacing((cur) => (cur === 'front' ? 'back' : 'front'));
   }, []);
 
@@ -697,6 +699,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         ) : shouldMountCamera ? (
           <View style={styles.sensorCenterWrap}>
             <CameraView
+              key={`camera-${facing}`}
               ref={cameraRef}
               style={
                 Platform.OS === 'web'
