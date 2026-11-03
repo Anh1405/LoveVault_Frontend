@@ -588,6 +588,7 @@ export const HomeScreen = () => {
       return res.data;
     },
     retry: 1,
+    refetchInterval: 30000,
   });
 
   const effectiveAnniversaryIso: string | null =
@@ -607,13 +608,14 @@ export const HomeScreen = () => {
     },
     [screenWidth],
   );
+  // Mỗi khi server trả ngày kỷ niệm mới thì cập nhật bản lưu trong máy theo server
   useEffect(() => {
-  const serverAnniv = counterData?.anniversaryDate || counterData?.startDate;
-  if (serverAnniv && !cachedAnniversaryIso) {
-    setCachedAnniversaryIso(serverAnniv);
-    void storage.setItem(anniversaryCacheKey, serverAnniv);
-  }
-}, [counterData?.anniversaryDate, counterData?.startDate, cachedAnniversaryIso, anniversaryCacheKey])
+    const serverAnniv = counterData?.anniversaryDate || counterData?.startDate;
+    if (serverAnniv) {
+      setCachedAnniversaryIso(serverAnniv);
+      void storage.setItem(anniversaryCacheKey, serverAnniv);
+    }
+  }, [counterData?.anniversaryDate, counterData?.startDate, anniversaryCacheKey]);
 
   const handleHorizontalMomentumEnd = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -644,7 +646,10 @@ export const HomeScreen = () => {
       });
       await queryClient.invalidateQueries({ queryKey: ['dayCounter'] });
     } catch {
-      // Đã lưu tại bộ nhớ thiết bị
+      Alert.alert(
+        'Chưa đồng bộ được',
+        'Ngày kỷ niệm mới chỉ lưu trên máy này. Thiết bị còn lại sẽ chưa thấy ngày này cho đến khi lưu lại thành công.',
+      );
     }
   };
 
