@@ -54,7 +54,8 @@
           "savePhotosPermission": "Ứng dụng cần quyền lưu ảnh và video vào bộ sưu tập của bạn.",
           "isAccessMediaLocationEnabled": true
         }
-      ]
+      ],
+      "expo-image"
     ],
     "extra": {
       "eas": {
