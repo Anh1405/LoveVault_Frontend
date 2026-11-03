@@ -62,15 +62,9 @@ interface LocketCameraCardProps {
   onPickFromGallery: (stamp: string, caption: string) => Promise<void>;
   onSwipeToDashboard: () => void;
   onPagerLockChange?: (locked: boolean) => void;
-  /** Chiều cao header + tab + inset đáy của trang cha. Dùng để khung camera chiếm đủ màn hình đầu. */
   reservedHeight?: number;
-  /** Nếu truyền vào, chạm dòng "Nhật ký Locket" sẽ gọi hàm này (ví dụ scrollTo của trang cha). */
   onScrollToJournal?: () => void;
 }
-
-/* ------------------------------------------------------------------ */
-/* Nút kính mờ đặt trên khung camera                                    */
-/* ------------------------------------------------------------------ */
 
 interface GlassButtonProps {
   onPress: () => void;
@@ -103,10 +97,6 @@ const GlassButton = memo(function GlassButton({
     </Pressable>
   );
 });
-
-/* ------------------------------------------------------------------ */
-/* Nút tròn hai bên nút chụp                                            */
-/* ------------------------------------------------------------------ */
 
 interface SideButtonProps {
   onPress: () => void;
@@ -150,7 +140,6 @@ interface FlipButtonProps {
   disabled: boolean;
 }
 
-// Icon xoay nửa vòng mỗi lần đổi camera. Chỉ dùng transform nên chạy trên native driver.
 const FlipButton = memo(function FlipButton({
   facing,
   onPress,
@@ -186,10 +175,6 @@ const FlipButton = memo(function FlipButton({
     </SideButton>
   );
 });
-
-/* ------------------------------------------------------------------ */
-/* Nút chụp / gửi: quầng hồng, vành đậm, lõi tim                         */
-/* ------------------------------------------------------------------ */
 
 interface ShutterButtonProps {
   variant: 'capture' | 'send';
@@ -261,36 +246,28 @@ const ShutterButton = memo(function ShutterButton({
   );
 });
 
-/* ------------------------------------------------------------------ */
-/* Xử lý chống bị zoom (crop 16:9 / chọn nhầm cam) trên Web & Mobile     */
-/* ------------------------------------------------------------------ */
-interface WebLensResult {
-  backLenses: MediaDeviceInfo[];
-  activeDeviceId: string | null;
-  activeLabel: string;
+interface WebLensConfig {
+  allBackCams: MediaDeviceInfo[];
+  activeCamId: string | null;
+  modeLabel: '0.5x' | '1x';
 }
 
-async function normalizeWebCameraWideFOV(
+async function applySafeWebCamera(
   facingMode: CameraType,
-  preferredDeviceId?: string | null,
-): Promise<WebLensResult> {
-  const emptyResult: WebLensResult = {
-    backLenses: [],
-    activeDeviceId: null,
-    activeLabel: '1x',
-  };
+  requestedMode: '0.5x' | '1x',
+): Promise<WebLensConfig> {
+  const fallback: WebLensConfig = { allBackCams: [], activeCamId: null, modeLabel: '1x' };
 
   if (Platform.OS !== 'web' || typeof document === 'undefined' || !navigator?.mediaDevices) {
-    return emptyResult;
+    return fallback;
   }
 
-  // Đợi 250ms để expo-camera hoàn tất việc gán srcObject mặc định
-  await new Promise((r) => setTimeout(r, 250));
+  await new Promise((r) => setTimeout(r, 150));
 
   try {
     const videos = Array.from(document.querySelectorAll('video'));
     const activeVideo = videos.find((v) => v.srcObject instanceof MediaStream);
-    if (!activeVideo) return emptyResult;
+    if (!activeVideo) return fallback;
 
     activeVideo.style.objectFit = 'cover';
     activeVideo.style.width = '100%';
@@ -298,76 +275,62 @@ async function normalizeWebCameraWideFOV(
     activeVideo.style.transform = facingMode === 'front' ? 'scaleX(-1)' : 'none';
 
     const currentStream = activeVideo.srcObject as MediaStream | null;
-    let currentTrack = currentStream?.getVideoTracks?.()[0];
-    let backCams: MediaDeviceInfo[] = [];
 
+    let videoDevices: MediaDeviceInfo[] = [];
     if (navigator.mediaDevices.enumerateDevices) {
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const videoDevices = devices.filter((d) => d.kind === 'videoinput');
+      videoDevices = devices.filter((d) => d.kind === 'videoinput');
+    }
 
-      backCams = videoDevices.filter(
-        (d) =>
-          /(back|rear|environment|sau)/i.test(d.label) &&
-          !/(tele|macro|depth|mono)/i.test(d.label),
-      );
-      if (backCams.length === 0 && videoDevices.length > 1) {
-        backCams = videoDevices.slice(1);
+    const backCams = videoDevices.filter(
+      (d) =>
+        /(back|rear|environment|sau)/i.test(d.label) && !/(tele|depth|mono)/i.test(d.label),
+    );
+    const availableCams = backCams.length > 0 ? backCams : videoDevices;
+
+    if (facingMode === 'back' && availableCams.length > 0) {
+      let targetCam = availableCams[0];
+      if (requestedMode === '0.5x' && availableCams.length > 1) {
+        targetCam =
+          availableCams.find((d) => /(ultra|0\.5|wide angle|back 1)/i.test(d.label)) ||
+          availableCams[1];
+      } else if (requestedMode === '1x') {
+        targetCam =
+          availableCams.find((d) => /(main|primary|back 0| 0 )/i.test(d.label)) ||
+          availableCams[0];
+      }
+
+      const currentTrack = currentStream?.getVideoTracks()?.[0];
+      const currentId = currentTrack?.getSettings?.().deviceId;
+
+      if (targetCam && targetCam.deviceId && targetCam.deviceId !== currentId) {
+        try {
+          const newStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              deviceId: { exact: targetCam.deviceId },
+            },
+          });
+          currentStream?.getTracks().forEach((t) => t.stop());
+          activeVideo.srcObject = newStream;
+          await activeVideo.play().catch(() => null);
+        } catch {
+          // Bỏ qua lỗi đổi phần cứng để tránh crash app
+        }
       }
     }
 
-    if (facingMode === 'back' && backCams.length > 0) {
-      // Nếu người dùng chủ động chọn 1 ống kính (ví dụ bấm nút 0.5x / 1x) thì ưu tiên ống kính đó
-      // Nếu chưa chọn, ưu tiên ống kính Ultra-Wide / Wide góc rộng nhất
-      const targetCam =
-        (preferredDeviceId && backCams.find((d) => d.deviceId === preferredDeviceId)) ||
-        backCams.find((d) => /(ultra|0\.5|wide)/i.test(d.label)) ||
-        backCams.find((d) => / 0 /.test(d.label)) ||
-        backCams[0];
-
-      const currentDeviceId = currentTrack?.getSettings?.().deviceId;
-
-      if (targetCam && targetCam.deviceId && targetCam.deviceId !== currentDeviceId) {
-        const newStream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            deviceId: { exact: targetCam.deviceId },
-            // Không ép width: 1280, height: 960 nằm ngang để tránh bị crop 2 bên khi cầm dọc điện thoại
-            resizeMode: { ideal: 'none' },
-          } as MediaTrackConstraints,
-        });
-        currentStream?.getTracks().forEach((t) => t.stop());
-        activeVideo.srcObject = newStream;
-        await activeVideo.play().catch(() => null);
-        currentTrack = newStream.getVideoTracks()[0];
-      }
-    }
-
-    // Hạ zoom phần cứng về mức thấp nhất (1x hoặc 0.5x) và tắt crop tự động
-    if (currentTrack && typeof currentTrack.applyConstraints === 'function') {
-      const caps = (currentTrack.getCapabilities?.() || {}) as Record<string, any>;
-      const advanced: Record<string, any> = {};
-
-      if (caps.zoom && typeof caps.zoom.min === 'number') {
-        advanced.zoom = caps.zoom.min;
-      }
-
-      await currentTrack.applyConstraints({
-        resizeMode: 'none',
-        ...(Object.keys(advanced).length > 0 ? { advanced: [advanced] } : {}),
-      } as any);
-    }
-
-    const finalDeviceId = currentTrack?.getSettings?.().deviceId || null;
-    const matchedCam = backCams.find((d) => d.deviceId === finalDeviceId);
-    const isUltra = matchedCam ? /(ultra|0\.5|wide angle|camera2 2)/i.test(matchedCam.label) : false;
+    const finalTrack = (activeVideo.srcObject as MediaStream)?.getVideoTracks()?.[0];
+    const finalId = finalTrack?.getSettings?.().deviceId || null;
+    const isUltra = availableCams.find((d) => d.deviceId === finalId && /(ultra|0\.5)/i.test(d.label));
 
     return {
-      backLenses: backCams,
-      activeDeviceId: finalDeviceId,
-      activeLabel: isUltra ? '0.5x' : '1x',
+      allBackCams: availableCams,
+      activeCamId: finalId,
+      modeLabel: isUltra ? '0.5x' : requestedMode,
     };
   } catch {
-    return emptyResult;
+    return fallback;
   }
 }
 
@@ -384,14 +347,8 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 }) => {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
-  // Thiết kế chuẩn Locket: Khung hình vuông lớn, tràn sát 2 mép màn hình (chỉ chừa 8px mỗi bên),
-  // bo góc tròn lớn (46px) và bỏ viền hộp dày để nhìn rộng và thoáng đạt.
   const sideMargin = 8;
-  const viewportSize = Math.min(
-    440,
-    Math.max(300, Math.round(screenWidth - sideMargin * 2)),
-  );
-  // Chiều cao cảm biến 4:3 thực tế để Native CameraView không tự phóng to (center-crop) hình ảnh
+  const viewportSize = Math.min(440, Math.max(300, Math.round(screenWidth - sideMargin * 2)));
   const nativeSensorHeight = Math.round((viewportSize * 4) / 3);
   const stageMinHeight = Math.max(560, screenHeight - reservedHeight);
 
@@ -407,10 +364,8 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
 
-  // Danh sách ống kính sau trên Web (để đổi nhanh 0.5x / 1x nếu máy có nhiều cam sau)
-  const [webBackLenses, setWebBackLenses] = useState<MediaDeviceInfo[]>([]);
-  const [activeWebLensId, setActiveWebLensId] = useState<string | null>(null);
-  const [webZoomBadge, setWebZoomBadge] = useState<string>('1x');
+  const [webCamList, setWebCamList] = useState<MediaDeviceInfo[]>([]);
+  const [lensMode, setLensMode] = useState<'0.5x' | '1x'>('1x');
 
   const initialStampText = useMemo(() => {
     if (myProfile.customStatusText) return myProfile.customStatusText;
@@ -511,6 +466,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   const handleFlipCamera = useCallback(() => {
     void Haptics.selectionAsync().catch(() => {});
     setIsCameraReady(false);
+    setCameraError(null);
     setFacing((cur) => (cur === 'front' ? 'back' : 'front'));
   }, []);
 
@@ -521,31 +477,25 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 
   const handleCameraReady = useCallback(() => {
     setIsCameraReady(true);
+    setCameraError(null);
     if (Platform.OS === 'web') {
-      void normalizeWebCameraWideFOV(facing, activeWebLensId).then((res) => {
-        if (res.backLenses.length > 0) setWebBackLenses(res.backLenses);
-        if (res.activeDeviceId) setActiveWebLensId(res.activeDeviceId);
-        setWebZoomBadge(res.activeLabel);
+      void applySafeWebCamera(facing, lensMode).then((res) => {
+        if (res.allBackCams.length > 0) setWebCamList(res.allBackCams);
+        setLensMode(res.modeLabel);
       });
     }
-  }, [facing, activeWebLensId]);
+  }, [facing, lensMode]);
 
-  // Cho phép đổi qua lại giữa các ống kính sau (0.5x Ultra-Wide / 1x Wide) trên trình duyệt Web
-  const handleCycleWebLens = useCallback(async () => {
-    if (Platform.OS !== 'web' || webBackLenses.length < 2) return;
+  const handleToggleZoomLens = useCallback(async () => {
+    if (Platform.OS !== 'web' || facing === 'front') return;
     void Haptics.selectionAsync().catch(() => {});
-    const currentIndex = webBackLenses.findIndex((d) => d.deviceId === activeWebLensId);
-    const nextLens = webBackLenses[(currentIndex + 1) % webBackLenses.length];
-    if (!nextLens) return;
+    const nextMode = lensMode === '1x' ? '0.5x' : '1x';
+    setLensMode(nextMode);
 
-    const res = await normalizeWebCameraWideFOV('back', nextLens.deviceId);
-    if (res.activeDeviceId) setActiveWebLensId(res.activeDeviceId);
-    setWebZoomBadge(
-      res.activeLabel === '1x' && (currentIndex + 1) % webBackLenses.length !== 0
-        ? '0.5x'
-        : res.activeLabel,
-    );
-  }, [webBackLenses, activeWebLensId]);
+    const res = await applySafeWebCamera('back', nextMode);
+    if (res.allBackCams.length > 0) setWebCamList(res.allBackCams);
+    setLensMode(res.modeLabel);
+  }, [facing, lensMode]);
 
   const handleMountError = useCallback((e: { message?: string }) => {
     setIsCameraReady(false);
@@ -558,8 +508,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
       setIsCapturing(true);
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-      // Trên Web: nếu đã đổi sang stream góc rộng tùy chỉnh, chụp trực tiếp từ thẻ <video>
-      // để bức ảnh lưu ra giữ nguyên đúng góc rộng đang hiển thị trên màn hình
       if (Platform.OS === 'web' && typeof document !== 'undefined') {
         const videos = Array.from(document.querySelectorAll('video'));
         const activeVideo = videos.find(
@@ -646,7 +594,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 
   return (
     <View style={[styles.root, { backgroundColor: colors.surface, minHeight: stageMinHeight }]}>
-      {/* Hàng trạng thái hai người */}
       <View style={styles.coupleStrip}>
         <View style={styles.personBox}>
           <View style={[styles.avatar, { backgroundColor: colors.primaryContainer }]}>
@@ -682,7 +629,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         </View>
       </View>
 
-      {/* Khung camera chuẩn Locket: tràn rộng sát lề, bo góc 46px mượt mà, góc nhìn rộng không bị zoom */}
       <View
         style={[
           styles.viewport,
@@ -737,7 +683,10 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
             <Pressable
               accessibilityRole="button"
               style={[styles.fallbackBtn, { backgroundColor: colors.primary }]}
-              onPress={() => setCameraError(null)}
+              onPress={() => {
+                setCameraError(null);
+                setIsCameraReady(false);
+              }}
             >
               <Text style={styles.fallbackBtnText}>Thử mở lại</Text>
             </Pressable>
@@ -769,7 +718,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
           </View>
         )}
 
-        {/* Lớp phủ phía trên: Flash (+ nút đổi ống kính 0.5x/1x trên Web) bên trái, nhãn trạng thái bên phải */}
         {granted && (
           <View style={styles.overlayTop} pointerEvents="box-none">
             <View style={styles.topLeftGroup} pointerEvents="box-none">
@@ -784,14 +732,29 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
               {showCameraChrome &&
                 Platform.OS === 'web' &&
                 facing === 'back' &&
-                webBackLenses.length > 1 && (
+                webCamList.length > 1 && (
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel="Đổi góc ống kính 0.5x hoặc 1x"
-                    onPress={() => void handleCycleWebLens()}
-                    style={({ pressed }) => [styles.lensBadgeBtn, pressed && styles.pressed]}
+                    accessibilityLabel="Chuyển đổi góc chụp 0.5x và 1x"
+                    onPress={() => void handleToggleZoomLens()}
+                    style={({ pressed }) => [styles.modernLensPill, pressed && styles.pressed]}
                   >
-                    <Text style={styles.lensBadgeText}>{webZoomBadge}</Text>
+                    <Text
+                      style={[
+                        styles.lensTextItem,
+                        lensMode === '0.5x' && styles.lensTextActive,
+                      ]}
+                    >
+                      0.5
+                    </Text>
+                    <Text
+                      style={[
+                        styles.lensTextItem,
+                        lensMode === '1x' && styles.lensTextActive,
+                      ]}
+                    >
+                      1x
+                    </Text>
                   </Pressable>
                 )}
             </View>
@@ -810,7 +773,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
           </View>
         )}
 
-        {/* Lời nhắn đè trực tiếp lên ảnh */}
         {granted && (
           <View style={styles.overlayBottom} pointerEvents="box-none">
             <View style={styles.captionPill}>
@@ -831,7 +793,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         )}
       </View>
 
-      {/* Hàng nút: thư viện, chụp, đổi camera (hoặc chụp lại, gửi) */}
       <View style={styles.shutterSection}>
         <View style={styles.shutterRow}>
           {previewUri ? (
@@ -895,7 +856,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         ) : null}
       </View>
 
-      {/* Chọn trạng thái đính lên ảnh */}
       <Text style={[styles.fieldHintLabel, { color: colors.textSecondary }]}>
         Trạng thái đính lên ảnh
       </Text>
@@ -939,7 +899,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         })}
       </ScrollView>
 
-      {/* Chân trang: gợi ý kéo xuống xem nhật ký, đường sang Ngày yêu */}
       <View style={styles.footerRow}>
         <Pressable
           accessibilityRole={onScrollToJournal ? 'button' : undefined}
@@ -1056,19 +1015,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  lensBadgeBtn: {
+  modernLensPill: {
     height: 38,
-    minWidth: 42,
     paddingHorizontal: 10,
     borderRadius: 19,
     backgroundColor: GLASS,
-    justifyContent: 'center',
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
   },
-  lensBadgeText: {
-    color: '#FFFFFF',
+  lensTextItem: {
+    color: 'rgba(255,255,255,0.6)',
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '700',
+  },
+  lensTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   stampBadge: {
     paddingHorizontal: 13,
@@ -1160,7 +1126,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sendLabel: { marginTop: 8, fontSize: 12, fontWeight: '600' },
-
   fieldHintLabel: { fontSize: 11, fontWeight: '600', marginBottom: 4 },
   stampScrollOuter: { alignSelf: 'stretch', flexGrow: 0 },
   stampScroll: { gap: 8, paddingVertical: 4, paddingRight: 4 },
@@ -1172,7 +1137,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   stampChipText: { fontSize: 12, fontWeight: '700' },
-
   footerRow: {
     flexDirection: 'row',
     alignItems: 'center',
