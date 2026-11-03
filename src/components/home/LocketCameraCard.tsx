@@ -41,19 +41,12 @@ const FLASH_LABEL: Record<FlashChoice, string> = {
   on: 'Flash đang bật, chạm để tắt',
 };
 
-const GLASS = 'rgba(24, 14, 18, 0.42)';
+const GLASS = 'rgba(24, 14, 18, 0.44)';
 const CAPTION_MAX = 80;
-const FRAME_PAD = 5;
-const FRAME_BORDER = 1.5;
-const SIDE_BTN = 52;
-const HALO = 92;
-const RING = 78;
-const CORE = 60;
-
-// Giới hạn kích thước khung camera để không bị phóng quá to trên màn hình lớn / điện thoại
-const MAX_VIEWPORT_SIZE = 300;
-const MIN_VIEWPORT_SIZE = 230;
-const VIEWPORT_SCREEN_RATIO = 0.78;
+const SIDE_BTN = 54;
+const HALO = 94;
+const RING = 82;
+const CORE = 66;
 
 export interface LocketStampItem {
   id: string;
@@ -98,7 +91,7 @@ const GlassButton = memo(function GlassButton({
       accessibilityLabel={label}
       accessibilityState={{ disabled }}
       disabled={disabled}
-      hitSlop={4}
+      hitSlop={6}
       onPress={onPress}
       style={({ pressed }) => [
         styles.glassBtn,
@@ -188,7 +181,7 @@ const FlipButton = memo(function FlipButton({
       label={facing === 'front' ? 'Đổi sang camera sau' : 'Đổi sang camera trước'}
     >
       <Animated.View style={{ transform: [{ rotate }] }}>
-        <FlipIcon size={26} color={color} />
+        <FlipIcon size={28} color={color} />
       </Animated.View>
     </SideButton>
   );
@@ -257,9 +250,9 @@ const ShutterButton = memo(function ShutterButton({
             {busy ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : variant === 'send' ? (
-              <SendIcon size={26} color="#FFFFFF" />
+              <SendIcon size={28} color="#FFFFFF" />
             ) : (
-              <HeartIcon size={28} color="#FFFFFF" />
+              <HeartIcon size={30} color="#FFFFFF" />
             )}
           </View>
         </View>
@@ -269,14 +262,21 @@ const ShutterButton = memo(function ShutterButton({
 });
 
 /* ------------------------------------------------------------------ */
-/* Màn hình chính                                                       */
+/* Xử lý chống bị zoom (crop 16:9) cho cả Web và Native                  */
 /* ------------------------------------------------------------------ */
 /**
- * Trên Web (Mobile Chrome / Safari), tự động:
- * 1. Đưa mức phần cứng zoom của track về mức nhỏ nhất / 1x (tránh bị kẹt zoom 2x).
- * 2. Yêu cầu tỷ lệ khung hình 4:3 hoặc 1:1 từ cảm biến để không bị crop phóng to bởi object-fit: cover.
+ * Nguyên nhân khiến hình trong camera bị "phóng bự / zoom sát mặt":
+ * 1. Mặc định trình duyệt Web hoặc CameraView mở luồng video 16:9 (VD: 1920x1080).
+ *    Khi nhét luồng 16:9 vào khung vuông 1:1 (object-fit: cover), 2 bên bị cắt mất 44%,
+ *    làm hình ảnh ở giữa bị phóng to lên gần 1.8 lần.
+ * 2. Giải pháp:
+ *    - Yêu cầu cảm biến trả về khung hình 4:3 chuẩn gốc của cảm biến ảnh (예: 1440x1080 hoặc 1280x960)
+ *      thay vì 16:9 bị crop sẵn.
+ *    - Đặt mức zoom phần cứng về mức nhỏ nhất (caps.zoom.min).
+ *    - Trên Native, render CameraView theo tỷ lệ 4:3 bên trong khung vuông overflow: hidden
+ *      để lấy trọn vẹn chiều rộng góc nhìn của ống kính, tuyệt đối không bị phóng đại.
  */
-async function normalizeWebCameraStreamTo1x(facingMode: CameraType) {
+async function normalizeWebCameraWideFOV(facingMode: CameraType) {
   if (Platform.OS !== 'web' || typeof document === 'undefined' || !navigator?.mediaDevices) {
     return;
   }
@@ -286,29 +286,29 @@ async function normalizeWebCameraStreamTo1x(facingMode: CameraType) {
     const activeVideo = videos.find((v) => v.srcObject instanceof MediaStream);
     if (!activeVideo) return;
 
-    // Giữ object-fit cover để phủ kín khung vuông
     activeVideo.style.objectFit = 'cover';
+    activeVideo.style.width = '100%';
+    activeVideo.style.height = '100%';
     activeVideo.style.transform = facingMode === 'front' ? 'scaleX(-1)' : 'none';
 
     const currentStream = activeVideo.srcObject as MediaStream | null;
     let currentTrack = currentStream?.getVideoTracks?.()[0];
 
-    // Nếu đang ở camera sau, ưu tiên chọn ống kính góc rộng chính (Wide/Main)
+    // Ở camera sau, đảm bảo chọn ống kính góc rộng (Main/Wide) chứ không phải ống kính Tele 2x
     if (facingMode === 'back' && navigator.mediaDevices.enumerateDevices) {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoDevices = devices.filter((d) => d.kind === 'videoinput');
 
-      // Tìm ống kính có nhãn 'wide', '0', 'back 0', 'main' hoặc loại bỏ tele/macro
       const preferredMainCam =
         videoDevices.find(
           (d) =>
-            /(wide|ultra|main|primary)/i.test(d.label) &&
-            !/(tele|zoom|macro|depth)/i.test(d.label)
+            /(wide|ultra|main|primary|0)/i.test(d.label) &&
+            !/(tele|zoom|macro|depth)/i.test(d.label),
         ) ||
         videoDevices.find(
           (d) =>
             /(back|rear|environment|sau)/i.test(d.label) &&
-            !/(tele|zoom|macro|depth)/i.test(d.label)
+            !/(tele|zoom|macro|depth)/i.test(d.label),
         ) ||
         videoDevices[0];
 
@@ -319,9 +319,10 @@ async function normalizeWebCameraStreamTo1x(facingMode: CameraType) {
           audio: false,
           video: {
             deviceId: { exact: preferredMainCam.deviceId },
-            aspectRatio: { ideal: 1 },
-            width: { ideal: 1080 },
-            height: { ideal: 1080 },
+            // Cảm biến điện thoại có tỷ lệ vật lý là 4:3 (1.333) -> lấy toàn bộ diện tích cảm biến, không bị crop
+            aspectRatio: { ideal: 1.333333 },
+            width: { ideal: 1280 },
+            height: { ideal: 960 },
           },
         });
         currentStream?.getTracks().forEach((t) => t.stop());
@@ -331,24 +332,24 @@ async function normalizeWebCameraStreamTo1x(facingMode: CameraType) {
       }
     }
 
-    // Ép mức Zoom phần cứng về nhỏ nhất (0.5x / 1x tùy cảm biến hỗ trợ)
     if (currentTrack && typeof currentTrack.applyConstraints === 'function') {
       const caps = (currentTrack.getCapabilities?.() || {}) as Record<string, any>;
       const advanced: Record<string, any> = {};
 
       if (caps.zoom) {
+        // Đưa về mức zoom nhỏ nhất mà ống kính hỗ trợ (1.0x hoặc 0.5x)
         advanced.zoom = caps.zoom.min ?? 1;
       }
 
       await currentTrack.applyConstraints({
-        aspectRatio: { ideal: 1 },
-        width: { ideal: 1080 },
-        height: { ideal: 1080 },
+        aspectRatio: { ideal: 1.333333 },
+        width: { ideal: 1280 },
+        height: { ideal: 960 },
         ...(Object.keys(advanced).length > 0 ? { advanced: [advanced] } : {}),
       } as MediaTrackConstraints);
     }
-  } catch (err) {
-    // Bỏ qua nếu trình duyệt không cho phép thay đổi constraints
+  } catch {
+    // Bỏ qua nếu trình duyệt không hỗ trợ đổi constraints
   }
 }
 
@@ -364,21 +365,17 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   onScrollToJournal,
 }) => {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
-  const frameInset = (FRAME_PAD + FRAME_BORDER) * 2;
 
-  // Thu gọn kích thước khung camera (khoảng 78% chiều ngang màn hình và tối đa 300px)
-  // giúp khung hình gọn gàng, đồng thời giảm hiện tượng bị phóng to / crop quá sát mặt
-  const availableWidth = screenWidth - METRICS.paddingHorizontal * 2 - frameInset;
-  const maxByHeight = Math.max(MIN_VIEWPORT_SIZE, screenHeight - reservedHeight - 250);
-  const viewportSize = Math.max(
-    MIN_VIEWPORT_SIZE,
-    Math.min(
-      MAX_VIEWPORT_SIZE,
-      maxByHeight,
-      Math.round(availableWidth * VIEWPORT_SCREEN_RATIO),
-    ),
+  // Thiết kế chuẩn Locket: Khung hình vuông lớn, tràn sát 2 mép màn hình (chỉ chừa 8px mỗi bên),
+  // bo góc tròn lớn (46px) và bỏ viền hộp dày để nhìn rộng và thoáng đạt.
+  const sideMargin = 8;
+  const viewportSize = Math.min(
+    440,
+    Math.max(300, Math.round(screenWidth - sideMargin * 2)),
   );
-  const stageMinHeight = Math.max(500, screenHeight - reservedHeight);
+  // Chiều cao cảm biến 4:3 thực tế để Native CameraView không tự phóng to (center-crop) hình ảnh
+  const nativeSensorHeight = Math.round((viewportSize * 4) / 3);
+  const stageMinHeight = Math.max(560, screenHeight - reservedHeight);
 
   const { myProfile, partnerProfile, updateProfiles } = useSettingsStore();
 
@@ -433,7 +430,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     };
   }, []);
 
-  // Tự hỏi quyền đúng một lần. Những lần sau người dùng chạm nút trong khung camera.
   useEffect(() => {
     if (autoAskedRef.current) return;
     if (isPageActive && permission && !permission.granted && permission.canAskAgain) {
@@ -442,12 +438,10 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     }
   }, [isPageActive, permission, requestPermission]);
 
-  // Quay lại từ Cài đặt hệ thống: đọc lại trạng thái quyền, hook không tự làm việc này.
   useEffect(() => {
     if (isAppActive && !grantedRef.current) void getPermission();
   }, [isAppActive, getPermission]);
 
-  // Mũi tên nhún nhẹ chỉ chạy khi trang đang hiện và app ở foreground.
   useEffect(() => {
     if (!isPageActive || !isAppActive) return;
     const loop = Animated.loop(
@@ -505,7 +499,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   const handleCameraReady = useCallback(() => {
     setIsCameraReady(true);
     if (Platform.OS === 'web') {
-      void normalizeWebCameraStreamTo1x(facing);
+      void normalizeWebCameraWideFOV(facing);
     }
   }, [facing]);
 
@@ -519,7 +513,10 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     try {
       setIsCapturing(true);
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.85 });
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.85,
+        skipProcessing: false,
+      });
       if (photo?.uri) {
         setPreviewUri(photo.uri);
       }
@@ -607,75 +604,75 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         </View>
       </View>
 
-      {/* Khung camera (thu gọn vừa vặn) */}
+      {/* Khung camera chuẩn Locket: tràn rộng sát lề, bo góc 46px mượt mà, góc nhìn 4:3 không bị zoom */}
       <View
         style={[
-          styles.frame,
+          styles.viewport,
           {
-            backgroundColor: colors.surface,
-            borderColor: colors.primaryContainer,
+            width: viewportSize,
+            height: viewportSize,
+            backgroundColor: '#121214',
             shadowColor: colors.primary,
           },
         ]}
       >
-        <View
-          style={[
-            styles.viewport,
-            { width: viewportSize, height: viewportSize, backgroundColor: colors.surfaceVariant },
-          ]}
-        >
-          {!permission ? (
-            <View style={styles.fallback}>
-              <ActivityIndicator size="small" color={colors.primary} />
-            </View>
-          ) : !permission.granted ? (
-            <View style={styles.fallback}>
-              <Text style={[styles.fallbackTitle, { color: colors.textPrimary }]}>
-                Chưa cấp quyền Máy ảnh
+        {!permission ? (
+          <View style={styles.fallback}>
+            <ActivityIndicator size="small" color={colors.primary} />
+          </View>
+        ) : !permission.granted ? (
+          <View style={styles.fallback}>
+            <Text style={[styles.fallbackTitle, { color: '#FFFFFF' }]}>
+              Chưa cấp quyền Máy ảnh
+            </Text>
+            <Text style={[styles.fallbackDesc, { color: 'rgba(255,255,255,0.72)' }]}>
+              Cấp quyền máy ảnh để chụp và gửi khoảnh khắc trực tiếp.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              style={[styles.fallbackBtn, { backgroundColor: colors.primary }]}
+              onPress={() =>
+                permission.canAskAgain ? void requestPermission() : void Linking.openSettings()
+              }
+            >
+              <Text style={styles.fallbackBtnText}>
+                {permission.canAskAgain ? 'Cho phép truy cập Máy ảnh' : 'Mở Cài đặt hệ thống'}
               </Text>
-              <Text style={[styles.fallbackDesc, { color: colors.textSecondary }]}>
-                Cấp quyền máy ảnh để chụp và gửi khoảnh khắc trực tiếp.
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                style={[styles.fallbackBtn, { backgroundColor: colors.primary }]}
-                onPress={() =>
-                  permission.canAskAgain ? void requestPermission() : void Linking.openSettings()
-                }
-              >
-                <Text style={styles.fallbackBtnText}>
-                  {permission.canAskAgain ? 'Cho phép truy cập Máy ảnh' : 'Mở Cài đặt hệ thống'}
-                </Text>
-              </Pressable>
-            </View>
-          ) : previewUri ? (
-            <Image
-              source={{ uri: previewUri }}
-              style={{ width: viewportSize, height: viewportSize }}
-              resizeMode="cover"
-              resizeMethod="resize"
-              fadeDuration={0}
-            />
-          ) : cameraError ? (
-            <View style={styles.fallback}>
-              <Text style={[styles.fallbackTitle, { color: colors.textPrimary }]}>
-                Không mở được ống kính
-              </Text>
-              <Text style={[styles.fallbackDesc, { color: colors.textSecondary }]}>
-                {cameraError}
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                style={[styles.fallbackBtn, { backgroundColor: colors.primary }]}
-                onPress={() => setCameraError(null)}
-              >
-                <Text style={styles.fallbackBtnText}>Thử mở lại</Text>
-              </Pressable>
-            </View>
-          ) : shouldMountCamera ? (
+            </Pressable>
+          </View>
+        ) : previewUri ? (
+          <Image
+            source={{ uri: previewUri }}
+            style={{ width: viewportSize, height: viewportSize }}
+            resizeMode="cover"
+            resizeMethod="resize"
+            fadeDuration={0}
+          />
+        ) : cameraError ? (
+          <View style={styles.fallback}>
+            <Text style={[styles.fallbackTitle, { color: '#FFFFFF' }]}>
+              Không mở được ống kính
+            </Text>
+            <Text style={[styles.fallbackDesc, { color: 'rgba(255,255,255,0.72)' }]}>
+              {cameraError}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              style={[styles.fallbackBtn, { backgroundColor: colors.primary }]}
+              onPress={() => setCameraError(null)}
+            >
+              <Text style={styles.fallbackBtnText}>Thử mở lại</Text>
+            </Pressable>
+          </View>
+        ) : shouldMountCamera ? (
+          <View style={styles.sensorCenterWrap}>
             <CameraView
               ref={cameraRef}
-              style={{ width: viewportSize, height: viewportSize }}
+              style={
+                Platform.OS === 'web'
+                  ? { width: viewportSize, height: viewportSize }
+                  : { width: viewportSize, height: nativeSensorHeight }
+              }
               facing={facing}
               flash={flash}
               zoom={0}
@@ -685,62 +682,64 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
               onCameraReady={handleCameraReady}
               onMountError={handleMountError}
             />
-          ) : (
-            <View style={styles.fallback}>
-              <Text style={[styles.fallbackDesc, { color: colors.textSecondary }]}>
-                Đang tạm dừng ống kính
+          </View>
+        ) : (
+          <View style={styles.fallback}>
+            <Text style={[styles.fallbackDesc, { color: 'rgba(255,255,255,0.72)' }]}>
+              Đang tạm dừng ống kính
+            </Text>
+          </View>
+        )}
+
+        {/* Lớp phủ phía trên: Flash bên trái giống Locket gốc, nhãn trạng thái bên phải */}
+        {granted && (
+          <View style={styles.overlayTop} pointerEvents="box-none">
+            {showCameraChrome ? (
+              <GlassButton onPress={handleFlashCycle} label={FLASH_LABEL[flash]}>
+                <FlashIcon mode={flash} size={22} />
+              </GlassButton>
+            ) : (
+              <View style={{ width: 42, height: 42 }} />
+            )}
+
+            <View
+              style={[
+                styles.stampBadge,
+                { backgroundColor: colors.primary, maxWidth: viewportSize - 16 * 2 - 42 - 10 },
+              ]}
+              pointerEvents="none"
+            >
+              <Text style={styles.stampBadgeText} numberOfLines={1}>
+                {selectedStamp}
               </Text>
             </View>
-          )}
+          </View>
+        )}
 
-          {/* Lớp phủ phía trên: nhãn trạng thái bên trái, flash bên phải */}
-          {granted && (
-            <View style={styles.overlayTop} pointerEvents="box-none">
-              <View
-                style={[
-                  styles.stampBadge,
-                  { backgroundColor: colors.primary, maxWidth: viewportSize - 10 * 2 - 40 - 8 },
-                ]}
-                pointerEvents="none"
-              >
-                <Text style={styles.stampBadgeText} numberOfLines={1}>
-                  {selectedStamp}
-                </Text>
-              </View>
-
-              {showCameraChrome && (
-                <GlassButton onPress={handleFlashCycle} label={FLASH_LABEL[flash]}>
-                  <FlashIcon mode={flash} size={22} />
-                </GlassButton>
-              )}
+        {/* Lời nhắn đè trực tiếp lên ảnh */}
+        {granted && (
+          <View style={styles.overlayBottom} pointerEvents="box-none">
+            <View style={styles.captionPill}>
+              <PencilIcon size={14} color="#FFFFFF" />
+              <TextInput
+                value={caption}
+                onChangeText={setCaption}
+                placeholder="Thêm lời nhắn..."
+                placeholderTextColor="rgba(255, 255, 255, 0.72)"
+                maxLength={CAPTION_MAX}
+                returnKeyType="done"
+                blurOnSubmit
+                style={styles.captionInlineInput}
+                selectionColor={colors.primary}
+              />
             </View>
-          )}
-
-          {/* Lời nhắn đè trực tiếp lên ảnh */}
-          {granted && (
-            <View style={styles.overlayBottom} pointerEvents="box-none">
-              <View style={styles.captionPill}>
-                <PencilIcon size={13} color="#FFFFFF" />
-                <TextInput
-                  value={caption}
-                  onChangeText={setCaption}
-                  placeholder="Thêm lời nhắn"
-                  placeholderTextColor="rgba(255, 255, 255, 0.65)"
-                  maxLength={CAPTION_MAX}
-                  returnKeyType="done"
-                  blurOnSubmit
-                  style={styles.captionInlineInput}
-                  selectionColor={colors.primary}
-                />
-              </View>
-            </View>
-          )}
-        </View>
+          </View>
+        )}
       </View>
 
       {/* Hàng nút: thư viện, chụp, đổi camera (hoặc chụp lại, gửi) */}
       <View style={styles.shutterSection}>
-        <View style={[styles.shutterRow, { maxWidth: viewportSize + 40 }]}>
+        <View style={styles.shutterRow}>
           {previewUri ? (
             <SideButton
               onPress={handleRetake}
@@ -748,7 +747,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
               bg={colors.surfaceVariant}
               label="Chụp lại"
             >
-              <CloseIcon size={22} color={colors.textPrimary} />
+              <CloseIcon size={24} color={colors.textPrimary} />
             </SideButton>
           ) : (
             <SideButton
@@ -756,7 +755,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
               bg={colors.surfaceVariant}
               label="Chọn ảnh từ thư viện"
             >
-              <GalleryIcon size={26} color={colors.textPrimary} />
+              <GalleryIcon size={28} color={colors.textPrimary} />
             </SideButton>
           )}
 
@@ -893,7 +892,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
-    marginBottom: 10,
+    marginBottom: 12,
   },
   personBox: {
     flex: 1,
@@ -913,27 +912,28 @@ const styles = StyleSheet.create({
   personName: { fontSize: 12, fontWeight: '700' },
   personStatus: { fontSize: 11, fontWeight: '600', marginTop: 1 },
 
-  frame: {
-    alignSelf: 'center',
-    padding: FRAME_PAD,
-    borderWidth: FRAME_BORDER,
-    borderRadius: 30,
-    shadowOpacity: 0.14,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 5,
-  },
   viewport: {
-    borderRadius: 24,
+    alignSelf: 'center',
+    borderRadius: 46,
     overflow: 'hidden',
     position: 'relative',
+    shadowOpacity: 0.14,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
+  },
+  sensorCenterWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
   },
 
   fallback: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: 24,
   },
   fallbackTitle: { fontSize: 15, fontWeight: '700', marginBottom: 6 },
   fallbackDesc: { fontSize: 13, textAlign: 'center', marginBottom: 14, lineHeight: 18 },
@@ -948,25 +948,25 @@ const styles = StyleSheet.create({
 
   overlayTop: {
     position: 'absolute',
-    top: 10,
-    left: 10,
-    right: 10,
+    top: 16,
+    left: 16,
+    right: 16,
     zIndex: 10,
     elevation: 6,
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
   },
   stampBadge: {
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: 14,
+    paddingHorizontal: 13,
+    paddingVertical: 7,
+    borderRadius: 18,
   },
-  stampBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
+  stampBadgeText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   glassBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: GLASS,
     justifyContent: 'center',
     alignItems: 'center',
@@ -974,29 +974,29 @@ const styles = StyleSheet.create({
 
   overlayBottom: {
     position: 'absolute',
-    left: 10,
-    right: 10,
-    bottom: 10,
+    left: 16,
+    right: 16,
+    bottom: 16,
     zIndex: 10,
     elevation: 6,
     alignItems: 'center',
   },
   captionPill: {
-    maxWidth: '92%',
-    minHeight: 36,
+    maxWidth: '88%',
+    minHeight: 40,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: Platform.OS === 'ios' ? 5 : 2,
-    borderRadius: 18,
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 6 : 2,
+    borderRadius: 22,
     backgroundColor: GLASS,
   },
   captionInlineInput: {
     flexShrink: 1,
-    minWidth: 90,
+    minWidth: 110,
     color: '#FFFFFF',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600',
     paddingVertical: 0,
     paddingHorizontal: 0,
@@ -1007,13 +1007,13 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 14,
   },
   shutterRow: {
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'space-around',
     paddingHorizontal: 12,
   },
   sideBtn: {
@@ -1035,7 +1035,7 @@ const styles = StyleSheet.create({
     width: RING,
     height: RING,
     borderRadius: RING / 2,
-    borderWidth: 3,
+    borderWidth: 3.5,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1046,7 +1046,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  sendLabel: { marginTop: 6, fontSize: 12, fontWeight: '600' },
+  sendLabel: { marginTop: 8, fontSize: 12, fontWeight: '600' },
 
   fieldHintLabel: { fontSize: 11, fontWeight: '600', marginBottom: 4 },
   stampScrollOuter: { alignSelf: 'stretch', flexGrow: 0 },
