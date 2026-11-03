@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { AccessibilityInfo } from 'react-native';
 import { storage } from '../services/storage';
 import { api } from '../services/api';
+import { uploadHeroWallpaperToCloud } from '../services/cloudMediaService';
 import { ThemePreset, ColorMode, CounterDisplayStyle } from '../constants/theme';
 
 export type HeartSkinType = '❤️' | '💖' | '🌸' | '✨' | '🔥' | '🧸' | '💌';
@@ -171,6 +172,37 @@ const getSharedRoomStorageKey = (coupleId?: string | null, userId?: string | nul
 
 const getUserPrivateStorageKey = (userId?: string | null) =>
   `lovevault_user_private_v6_${userId || 'guest'}`;
+
+// Đếm số lần lưu đang chạy dở, lúc đó không kéo dữ liệu từ server để tránh đè lên thay đổi vừa nhập
+let pendingLocalWrites = 0;
+
+const isRemoteUrl = (uri?: string | null): uri is string =>
+  typeof uri === 'string' && /^https?:\/\//i.test(uri);
+
+// Dữ liệu kéo từ server có thể chứa đường dẫn file nội bộ của máy đối phương.
+// Máy này không đọc được các đường dẫn đó nên chỉ giữ lại link http(s).
+function sanitizeRemoteRoomPayload(remote: any) {
+  const next = { ...remote };
+
+  if (!isRemoteUrl(next.heroWallpaperUri)) {
+    delete next.heroWallpaperUri;
+  }
+
+  if (next.membersById && typeof next.membersById === 'object') {
+    const cleanMembers: Record<string, any> = {};
+    for (const [uid, prof] of Object.entries(next.membersById)) {
+      if (prof && typeof prof === 'object') {
+        const { avatarUri, ...rest } = prof as any;
+        cleanMembers[uid] = isRemoteUrl(avatarUri) ? { ...rest, avatarUri } : rest;
+      } else {
+        cleanMembers[uid] = prof;
+      }
+    }
+    next.membersById = cleanMembers;
+  }
+
+  return next;
+}
 
 const DEFAULT_MY_PROFILE: PersonProfile = {
   userId: null,
@@ -698,7 +730,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
     pullSharedRoomSettingsFromServer: async () => {
       const { activeCoupleId, activeUserId } = get();
-      if (!activeCoupleId) return;
+      if (!activeCoupleId || pendingLocalWrites > 0) return;
       try {
         const res = await api.get('/api/v1/couples/shared-settings');
         const remote = res.data?.settings || res.data;
@@ -706,7 +738,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           await get().syncIdentityFromAuth({
             userId: activeUserId || '',
             coupleId: activeCoupleId,
-            sharedRoomPayload: remote,
+            sharedRoomPayload: sanitizeRemoteRoomPayload(remote),
           });
         }
       } catch {
@@ -747,8 +779,29 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     },
 
     updateAppearance: async (patch) => {
+      pendingLocalWrites += 1;
+      try {
       set((state) => ({ ...state, ...patch }));
+
+      const pickedWallpaper = patch.heroWallpaperUri;
+      if (pickedWallpaper && !isRemoteUrl(pickedWallpaper)) {
+        // Lưu tạm ở máy trước để không mất nếu app bị tắt giữa lúc upload
+        await persistSharedRoomState(false);
+        try {
+          const cloudUrl = await uploadHeroWallpaperToCloud(pickedWallpaper);
+          // Chỉ thay bằng link online nếu trong lúc upload người dùng chưa đổi sang hình khác
+          if (get().heroWallpaperUri === pickedWallpaper) {
+            set({ heroWallpaperUri: cloudUrl });
+          }
+        } catch {
+          // Mất mạng: giữ đường dẫn nội bộ, ảnh đã nằm trong hàng đợi upload bù
+        }
+      }
+
       await persistSharedRoomState(true);
+      } finally {
+        pendingLocalWrites -= 1;
+      }
     },
 
     updateNotificationPrefs: async (patch) => {
@@ -766,6 +819,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     },
 
     updateProfiles: async (myPatch, partnerPatch) => {
+      pendingLocalWrites += 1;
+      try {
       set((state) => {
         const myUid = state.activeUserId || 'local_me';
         const partnerKeyFromMembers = Object.keys(state.membersById).find(
@@ -805,7 +860,34 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           partnerProfile: updatedPartner,
         };
       });
+
+      const pickedAvatar = myPatch?.avatarUri;
+      if (pickedAvatar && !isRemoteUrl(pickedAvatar)) {
+        await persistSharedRoomState(false);
+        try {
+          const cloudUrl = await uploadHeroWallpaperToCloud(pickedAvatar);
+          if (get().myProfile.avatarUri === pickedAvatar) {
+            set((state) => {
+              const myUid = state.activeUserId || 'local_me';
+              const nextMy: PersonProfile = { ...state.myProfile, avatarUri: cloudUrl };
+              return {
+                myProfile: nextMy,
+                membersById: {
+                  ...state.membersById,
+                  [myUid]: { ...(state.membersById[myUid] || nextMy), avatarUri: cloudUrl },
+                },
+              };
+            });
+          }
+        } catch {
+          // Mất mạng: giữ avatar nội bộ, lần lưu Profile sau sẽ thử upload lại
+        }
+      }
+
       await persistSharedRoomState(true);
+      } finally {
+        pendingLocalWrites -= 1;
+      }
     },
 
     updateMyPrivateNote: async (patch) => {

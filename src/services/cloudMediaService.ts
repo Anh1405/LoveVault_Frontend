@@ -87,6 +87,52 @@ const writePendingQueue = async (queue: PendingMediaQueueItem[]): Promise<void> 
   await storage.setItem(PENDING_MEDIA_SYNC_KEY, JSON.stringify(queue));
 };
 
+/**
+ * 1. Upload ảnh nền cục bộ (file://) lên Cloud (S3/R2) 
+ * để lấy link online (https://) chia sẻ được cho đối phương.
+ */
+export const uploadHeroWallpaperToCloud = async (localUri: string): Promise<string> => {
+  // Nếu đã là đường link online thì không cần upload lại
+  if (localUri.startsWith('http://') || localUri.startsWith('https://')) {
+    return localUri;
+  }
+
+  const record = await uploadMediaToCloudAndSaveDb({
+    localUri,
+    category: 'ALBUM_MEDIA',
+    mediaType: 'IMAGE',
+    caption: 'Hero Wallpaper',
+  });
+
+  return record.remoteUrl;
+};
+
+/**
+ * 2. Đẩy toàn bộ cấu hình phòng (Hình nền online, Profile 2 đứa, Ngày sinh, MoMo) lên PostgreSQL
+ */
+export const pushSharedRoomSettingsToCloud = async (
+  coupleId: string,
+  settings: {
+    heroWallpaperUri?: string | null;
+    profiles?: Record<string, { nickname: string; avatarUri?: string | null; birthDate?: string | null }>;
+    anniversaryDate?: string | null;
+    momoFund?: any;
+    themePreset?: string;
+  },
+): Promise<boolean> => {
+  if (!coupleId) return false;
+  try {
+    await api.patch('/api/v1/couples/shared-settings', {
+      coupleId,
+      sharedSettings: settings,
+      updatedAt: new Date().toISOString(),
+    });
+    return true;
+  } catch (error) {
+    console.error('Lỗi đẩy sharedSettings lên Cloud:', error);
+    return false;
+  }
+};
 export const enqueuePendingMediaUpload = async (
   input: UploadMediaInput,
 ): Promise<PendingMediaQueueItem> => {

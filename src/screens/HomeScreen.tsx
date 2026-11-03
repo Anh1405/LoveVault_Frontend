@@ -22,6 +22,7 @@ import {
   useColorScheme,
   useWindowDimensions,
   Linking,
+  AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
@@ -710,6 +711,28 @@ export const HomeScreen = () => {
     syncCoupleStatusFromServer,
     pullSharedRoomSettingsFromServer,
   ]);
+
+  // Tự kéo thiết lập chung (hồ sơ, hình nền...) khi mở lại app và định kỳ lúc đang dùng
+  useEffect(() => {
+    if (!coupleId) return;
+
+    const pullQuietly = () => {
+      pullSharedRoomSettingsFromServer().catch(() => null);
+    };
+
+    pullQuietly();
+    const timer = setInterval(() => {
+      if (AppState.currentState === 'active') pullQuietly();
+    }, 20000);
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') pullQuietly();
+    });
+
+    return () => {
+      clearInterval(timer);
+      subscription.remove();
+    };
+  }, [coupleId, pullSharedRoomSettingsFromServer]);
 
   const exportBackupJson = async () => {
     return JSON.stringify(
