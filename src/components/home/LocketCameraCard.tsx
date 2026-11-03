@@ -303,17 +303,31 @@ async function applySafeWebCamera(
 
       if (targetCam && targetCam.deviceId && targetCam.deviceId !== currentId) {
         try {
-          const newStream = await navigator.mediaDevices.getUserMedia({
-            audio: false,
-            video: {
-              deviceId: { exact: targetCam.deviceId },
-            },
-          });
-          currentStream?.getTracks().forEach((t) => t.stop());
-          activeVideo.srcObject = newStream;
-          await activeVideo.play().catch(() => null);
+          let newStream: MediaStream | null = null;
+          // 1. Thử lấy exact deviceId
+          try {
+            newStream = await navigator.mediaDevices.getUserMedia({
+              audio: false,
+              video: { deviceId: { exact: targetCam.deviceId } },
+            });
+          } catch {
+            // 2. Nếu không hỗ trợ exact (iOS Safari), thử với ideal
+            newStream = await navigator.mediaDevices.getUserMedia({
+              audio: false,
+              video: { deviceId: { ideal: targetCam.deviceId } },
+            });
+          }
+
+          // Chỉ thay thế stream khi thực sự thu được video track hợp lệ
+          if (newStream && newStream.getVideoTracks().length > 0) {
+            if (currentStream) {
+              currentStream.getTracks().forEach((t) => t.stop());
+            }
+            activeVideo.srcObject = newStream;
+            await activeVideo.play().catch(() => null);
+          }
         } catch {
-          // Bỏ qua lỗi đổi phần cứng
+          // Bỏ qua lỗi đổi phần cứng, giữ nguyên stream 1x hiện tại không làm đen cam
         }
       }
     }
@@ -471,7 +485,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     void Haptics.selectionAsync().catch(() => {});
     setIsCameraReady(false);
     setCameraError(null);
-    setLensMode('1x'); // Ép trả về góc 1x tiêu chuẩn trước khi lật cam để chuyển nhanh và không nghẽn stream
+    setLensMode('1x');
     setFacing((cur) => (cur === 'front' ? 'back' : 'front'));
   }, []);
 
