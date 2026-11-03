@@ -94,7 +94,8 @@ const getWebVideoMeta = (
 
     video.onloadedmetadata = () => {
       durationSec = Math.round(video.duration) || 0;
-      video.currentTime = Math.min(0.5, (video.duration || 1) / 2);
+      // Lấy khung hình ở giây thứ 2, video ngắn hơn thì lấy giữa video
+      video.currentTime = Math.min(2, (video.duration || 1) / 2);
     };
     video.onseeked = () => {
       try {
@@ -213,7 +214,12 @@ export const uploadMediaToCloudAndSaveDb = async (
         thumbLocalUri = meta.thumbnailUri;
         if (!durationSec) durationSec = meta.durationSec;
       } else {
-        const t = await VideoThumbnails.getThumbnailAsync(input.localUri, { time: 500 });
+        // Khung hình ở giây thứ 2, video ngắn hơn thì lấy giữa video
+        const thumbTimeMs =
+          durationSec && durationSec > 0
+            ? Math.min(2000, Math.floor((durationSec * 1000) / 2))
+            : 2000;
+        const t = await VideoThumbnails.getThumbnailAsync(input.localUri, { time: thumbTimeMs });
         thumbLocalUri = t.uri;
       }
 

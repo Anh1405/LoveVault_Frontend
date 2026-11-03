@@ -139,6 +139,13 @@ const InlineVideoPlayer: React.FC<{ uri: string }> = ({ uri }) => {
 };
 
 
+const formatDuration = (sec: number): string => {
+  const total = Math.max(0, Math.round(sec));
+  const m = Math.floor(total / 60);
+  const r = total % 60;
+  return m > 0 ? `${m}:${String(r).padStart(2, '0')}` : `${r}s`;
+};
+
 const MediaCardItem = React.memo(({
   item,
   colors,
@@ -149,30 +156,56 @@ const MediaCardItem = React.memo(({
   onSelect: (item: CoupleMediaItem) => void;
 }) => {
   const effectiveUri = item.remoteUrl || item.uri;
-  // Dùng thumbnailUri nếu là video, nếu không có thì fallback sang URL gốc
-  const displayUri = item.mediaType === 'VIDEO' ? (item.thumbnailUri || effectiveUri) : effectiveUri;
+  const isVideo = item.mediaType === 'VIDEO';
+  const hasThumb = Boolean(item.thumbnailUri);
+  const [webDuration, setWebDuration] = useState<number>(0);
+
+  // Video cũ chưa có thumbnail: trên web dùng chính thẻ <video> để hiện khung hình ở giây thứ 2
+  const useWebVideoPoster = isVideo && !hasThumb && Platform.OS === 'web';
+  const displayUri = isVideo ? item.thumbnailUri || effectiveUri : effectiveUri;
+  const duration = item.durationSec && item.durationSec > 0 ? item.durationSec : webDuration;
 
   return (
     <Pressable
       style={[styles.mediaCard, { backgroundColor: colors.mediaCardBg }]}
       onPress={() => onSelect(item)}
     >
-      <ExpoImage
-        source={{ uri: displayUri }}
-        style={styles.mediaThumbImage}
-        contentFit="cover"
-        transition={200}
-        cachePolicy="memory-disk" // Tối ưu cache hình ảnh vào đĩa & bộ nhớ RAM
-      />
+      {useWebVideoPoster ? (
+        React.createElement('video', {
+          src: `${effectiveUri}#t=2`,
+          preload: 'metadata',
+          muted: true,
+          playsInline: true,
+          onLoadedMetadata: (e: any) => {
+            const d = Math.round(e?.currentTarget?.duration || 0);
+            if (d > 0) setWebDuration(d);
+          },
+          style: {
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            pointerEvents: 'none',
+          },
+        })
+      ) : (
+        <ExpoImage
+          source={{ uri: displayUri }}
+          style={styles.mediaThumbImage}
+          contentFit="cover"
+          transition={200}
+          cachePolicy="memory-disk" // Tối ưu cache hình ảnh vào đĩa & bộ nhớ RAM
+        />
+      )}
 
-      {item.mediaType === 'VIDEO' && (
-        <View style={styles.videoOverlayContainer}>
+      {isVideo && (
+        <View style={styles.videoOverlayContainer} pointerEvents="none">
           <View style={[styles.playCircle, { backgroundColor: colors.primary }]}>
             <Text style={{ color: '#FFF', fontSize: 14 }}>▶</Text>
           </View>
-          {item.durationSec !== undefined && (
-            <Text style={styles.durationTag}>{item.durationSec}s</Text>
-          )}
+          {duration > 0 && <Text style={styles.durationTag}>{formatDuration(duration)}</Text>}
         </View>
       )}
 
@@ -272,7 +305,9 @@ export const HomeScreen = () => {
 
   // Gộp dữ liệu từ Cloud Server (PostgreSQL + S3/R2) với dữ liệu Local trên thiết bị
   const mergedMediaList = React.useMemo<CoupleMediaItem[]>(() => {
-    const cloudItems: CoupleMediaItem[] = (cloudMediaPayload?.albumMedia || []).map((m) => ({
+    const cloudItems: CoupleMediaItem[] = (cloudMediaPayload?.albumMedia || [])
+      .filter((m) => m.caption !== 'thumbnail')
+      .map((m) => ({
       id: m.id,
       uri: m.remoteUrl,
       remoteUrl: m.remoteUrl,
@@ -772,6 +807,14 @@ export const HomeScreen = () => {
   const scrollX = useRef(new Animated.Value(0)).current;
   const [switchWidth, setSwitchWidth] = useState(0);
   const [pagerScrollEnabled, setPagerScrollEnabled] = useState(true);
+  const [pagerHeight, setPagerHeight] = useState(0);
+  const handlePagerLayout = useCallback((e: LayoutChangeEvent) => {
+    setPagerHeight(Math.round(e.nativeEvent.layout.height));
+  }, []);
+  const pageStyle = React.useMemo(
+    () => (pagerHeight > 0 ? { width: screenWidth, height: pagerHeight } : { width: screenWidth, flex: 1 }),
+    [screenWidth, pagerHeight],
+  );
   const [reactionSnapId, setReactionSnapId] = useState<string | null>(null);
 
   const switchSegWidth = Math.max(0, (switchWidth - PAGE_SWITCH_PADDING * 2) / 2);
@@ -1068,10 +1111,12 @@ export const HomeScreen = () => {
         onScroll={onPagerScroll}
         onMomentumScrollEnd={handleHorizontalMomentumEnd}
         scrollEventThrottle={16}
+        onLayout={handlePagerLayout}
+        directionalLockEnabled
         style={{ flex: 1 }}
       >
         {/* PAGE 0: LOCKET */}
-        <View style={{ width: screenWidth, flex: 1 }}>
+        <View style={pageStyle}>
           <FlatList
             data={mergedLocketSnaps}
             keyExtractor={locketSnapKeyExtractor}
@@ -1129,8 +1174,10 @@ export const HomeScreen = () => {
         </View>
 
         {/* PAGE 1: KHÔNG GIAN CẶP ĐÔI */}
-        <View style={{ width: screenWidth, flex: 1 }}>
+        <View style={pageStyle}>
           <ScrollView
+            style={{ flex: 1 }}
+            nestedScrollEnabled
             contentContainerStyle={styles.scrollContent}
             refreshControl={
               <RefreshControl
