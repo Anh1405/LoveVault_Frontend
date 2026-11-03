@@ -1,5 +1,5 @@
 // src/components/home/modals/ProfileModal.tsx
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -57,7 +57,10 @@ export const ProfileModal: React.FC<{
   const [myBirthIso, setMyBirthIso] = useState<string | null>(myProfile.birthDate);
   const [partnerBirthIso, setPartnerBirthIso] = useState<string | null>(partnerProfile.birthDate);
   const [myMood, setMyMood] = useState(myProfile.moodEmoji);
+  const [myAvatarUri, setMyAvatarUri] = useState<string | null>(myProfile.avatarUri || null);
+  const [partnerAvatarUri, setPartnerAvatarUri] = useState<string | null>(partnerProfile.avatarUri || null);
   const [pickingTarget, setPickingTarget] = useState<'ME' | 'PARTNER' | null>(null);
+  const lastPickingTargetRef = useRef<'ME' | 'PARTNER' | null>(null);
 
   const [editingCouponId, setEditingCouponId] = useState<string | null>(null);
   const [cpTitle, setCpTitle] = useState('');
@@ -71,20 +74,32 @@ export const ProfileModal: React.FC<{
   const [secretNote, setSecretNote] = useState(myPrivateNote.secretNote || '');
   const [randomIdea, setRandomIdea] = useState<string>(FUN_DATE_IDEAS[0]);
 
+  const prevVisibleRef = useRef(false);
+
+  // Chỉ đồng bộ state từ store vào form khi Modal chuyển từ đóng sang mở
+  // Tránh việc store cập nhật ngầm hoặc đổi ảnh đại diện làm mất ngày sinh / biệt danh đang nhập
   useEffect(() => {
-    if (visible) {
+    if (visible && !prevVisibleRef.current) {
       setMyNick(myProfile.nickname);
       setPartnerNick(partnerProfile.nickname);
       setMyBirthIso(myProfile.birthDate);
       setPartnerBirthIso(partnerProfile.birthDate);
       setMyMood(myProfile.moodEmoji);
+      setMyAvatarUri(myProfile.avatarUri || null);
+      setPartnerAvatarUri(partnerProfile.avatarUri || null);
 
       setFavDrink(myPrivateNote.favDrink);
       setShoeClothSize(myPrivateNote.shoeClothSize);
       setHowToComfort(myPrivateNote.howToComfort);
       setSecretNote(myPrivateNote.secretNote || '');
     }
+    prevVisibleRef.current = visible;
   }, [visible, myProfile, partnerProfile, myPrivateNote]);
+
+  const openDatePicker = (target: 'ME' | 'PARTNER') => {
+    lastPickingTargetRef.current = target;
+    setPickingTarget(target);
+  };
 
   const { myCoupons, partnerCoupons, pendingPartnerRequestsCount } = useMemo(() => {
     const mine: LoveCouponItem[] = [];
@@ -135,12 +150,23 @@ export const ProfileModal: React.FC<{
       quality: 0.75,
     });
     if (!res.canceled && res.assets?.[0]) {
+      const selectedUri = res.assets[0].uri;
       if (target === 'ME') {
-        await updateProfiles({ avatarUri: res.assets[0].uri });
+        setMyAvatarUri(selectedUri);
+        await updateProfiles({ avatarUri: selectedUri });
       } else {
-        await updateProfiles(undefined, { avatarUri: res.assets[0].uri });
+        setPartnerAvatarUri(selectedUri);
+        await updateProfiles(undefined, { avatarUri: selectedUri });
       }
     }
+  };
+
+  const resetCouponForm = () => {
+    setEditingCouponId(null);
+    setCpTitle('');
+    setCpDesc('');
+    setCpIcon('🎟');
+    setCpTargetOwner('ME');
   };
 
   const handleSaveCouponForm = async () => {
@@ -148,27 +174,27 @@ export const ProfileModal: React.FC<{
       Alert.alert('Thiếu tên phiếu', 'Vui lòng nhập tên phiếu.');
       return;
     }
+    const finalTitle = cpTitle.trim();
+    const finalDesc = cpDesc.trim() || 'Áp dụng khi được đối phương duyệt';
+
     if (editingCouponId) {
       await updateLoveCoupon(
         editingCouponId,
-        cpTitle,
-        cpDesc || 'Áp dụng khi được đối phương duyệt',
+        finalTitle,
+        finalDesc,
         cpIcon,
         cpTargetOwner,
       );
     } else {
       await addLoveCoupon(
-        cpTitle,
-        cpDesc || 'Áp dụng khi được đối phương duyệt',
+        finalTitle,
+        finalDesc,
         cpIcon,
         cpTargetOwner,
       );
-      setCouponOwnerFilter(cpTargetOwner === 'ME' ? 'MINE' : 'PARTNER');
     }
-    setEditingCouponId(null);
-    setCpTitle('');
-    setCpDesc('');
-    setCpIcon('🎟');
+    setCouponOwnerFilter(cpTargetOwner === 'ME' ? 'MINE' : 'PARTNER');
+    resetCouponForm();
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
@@ -190,6 +216,19 @@ export const ProfileModal: React.FC<{
     Alert.alert(
       'Đã gửi yêu cầu dùng phiếu!',
       `Phiếu "${cp.title}" đang chờ ${partnerProfile.nickname} bấm "Cho phép" để chính thức có hiệu lực.`,
+    );
+  };
+
+  const handleCancelMyCouponRequest = async (cp: LoveCouponItem) => {
+    const res = await respondLoveCouponRequest(cp.id, false);
+    if (!res.ok) {
+      Alert.alert('Thông báo', res.reason);
+      return;
+    }
+    void Haptics.selectionAsync().catch(() => {});
+    Alert.alert(
+      'Đã thu hồi yêu cầu',
+      `Phiếu "${cp.title}" đã được đưa về trạng thái sẵn sàng sử dụng.`,
     );
   };
 
@@ -218,11 +257,13 @@ export const ProfileModal: React.FC<{
         nickname: myNick.trim() || 'Bạn',
         birthDate: myBirthIso,
         moodEmoji: myMood,
+        avatarUri: myAvatarUri ?? myProfile.avatarUri,
         lastActiveAt: 'Đang hoạt động',
       },
       {
         nickname: partnerNick.trim() || 'Người ấy',
         birthDate: partnerBirthIso,
+        avatarUri: partnerAvatarUri ?? partnerProfile.avatarUri,
       },
     );
     await updateMyPrivateNote({
@@ -324,11 +365,11 @@ export const ProfileModal: React.FC<{
                 <View style={[styles.profileSection, { borderColor: colors.borderSubtle }]}>
                   <View style={styles.sectionHeaderRow}>
                     <Text style={[styles.subHeading, { color: colors.textPrimary, marginBottom: 0 }]}>
-                      Bạn ({myProfile.nickname})
+                      Bạn ({myNick.trim() || myProfile.nickname})
                     </Text>
                     <Pressable
                       style={[styles.inlineActionChip, { backgroundColor: colors.primaryContainer }]}
-                      onPress={() => pickAvatar('ME')}
+                      onPress={() => void pickAvatar('ME')}
                     >
                       <Text style={{ color: colors.onPrimaryContainer, fontSize: 12, fontWeight: '700' }}>
                         Đổi ảnh đại diện
@@ -347,7 +388,7 @@ export const ProfileModal: React.FC<{
                   <View style={styles.rowBetween}>
                     <Pressable
                       style={[styles.dateBtn, { borderColor: colors.outline, flex: 1, marginRight: 10 }]}
-                      onPress={() => setPickingTarget('ME')}
+                      onPress={() => openDatePicker('ME')}
                     >
                       <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '500' }}>
                         Ngày sinh: {myBirthIso || 'Chọn ngày'}
@@ -367,11 +408,11 @@ export const ProfileModal: React.FC<{
                 <View style={[styles.profileSection, { borderColor: colors.borderSubtle }]}>
                   <View style={styles.sectionHeaderRow}>
                     <Text style={[styles.subHeading, { color: colors.textPrimary, marginBottom: 0 }]}>
-                      Người thương ({partnerProfile.nickname})
+                      Người thương ({partnerNick.trim() || partnerProfile.nickname})
                     </Text>
                     <Pressable
                       style={[styles.inlineActionChip, { backgroundColor: colors.primaryContainer }]}
-                      onPress={() => pickAvatar('PARTNER')}
+                      onPress={() => void pickAvatar('PARTNER')}
                     >
                       <Text style={{ color: colors.onPrimaryContainer, fontSize: 12, fontWeight: '700' }}>
                         Đổi ảnh đại diện
@@ -390,7 +431,7 @@ export const ProfileModal: React.FC<{
                   <View style={styles.rowBetween}>
                     <Pressable
                       style={[styles.dateBtn, { borderColor: colors.outline, flex: 1, marginRight: 10 }]}
-                      onPress={() => setPickingTarget('PARTNER')}
+                      onPress={() => openDatePicker('PARTNER')}
                     >
                       <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '500' }}>
                         Ngày sinh: {partnerBirthIso || 'Chọn ngày'}
@@ -410,23 +451,32 @@ export const ProfileModal: React.FC<{
                 <DateTimeField
                   visible={pickingTarget !== null}
                   mode="date"
-                  title="Chọn ngày sinh"
+                  title={
+                    pickingTarget === 'PARTNER'
+                      ? 'Chọn ngày sinh người thương'
+                      : 'Chọn ngày sinh của bạn'
+                  }
                   colors={colors}
                   maximumDate={new Date()}
                   value={(() => {
-                    const iso = pickingTarget === 'PARTNER' ? partnerBirthIso : myBirthIso;
+                    const activeTarget = pickingTarget || lastPickingTargetRef.current;
+                    const iso = activeTarget === 'PARTNER' ? partnerBirthIso : myBirthIso;
                     if (iso) {
                       const [y, m, d] = iso.split('-').map(Number);
                       if (y && m && d) return new Date(y, m - 1, d);
                     }
                     return new Date(2002, 0, 1);
                   })()}
-                  onClose={() => setPickingTarget(null)}
                   onChange={(selected) => {
                     const iso = toIsoDate(selected);
-                    if (pickingTarget === 'ME') setMyBirthIso(iso);
-                    else if (pickingTarget === 'PARTNER') setPartnerBirthIso(iso);
+                    const target = pickingTarget || lastPickingTargetRef.current;
+                    if (target === 'ME') {
+                      setMyBirthIso(iso);
+                    } else if (target === 'PARTNER') {
+                      setPartnerBirthIso(iso);
+                    }
                   }}
+                  onClose={() => setPickingTarget(null)}
                 />
 
                 <Text style={[styles.helperNote, { color: colors.textSecondary }]}>
@@ -470,7 +520,7 @@ export const ProfileModal: React.FC<{
                         }}
                         numberOfLines={1}
                       >
-                        🎟 Của {myProfile.nickname}
+                        🎟 Của {myNick.trim() || myProfile.nickname}
                       </Text>
                     </Pressable>
 
@@ -497,7 +547,7 @@ export const ProfileModal: React.FC<{
                         }}
                         numberOfLines={1}
                       >
-                        🎁 Tặng {partnerProfile.nickname}
+                        🎁 Tặng {partnerNick.trim() || partnerProfile.nickname}
                       </Text>
                     </Pressable>
                   </View>
@@ -544,11 +594,7 @@ export const ProfileModal: React.FC<{
                     {editingCouponId && (
                       <Pressable
                         style={[styles.secondaryBtn, { backgroundColor: colors.surface }]}
-                        onPress={() => {
-                          setEditingCouponId(null);
-                          setCpTitle('');
-                          setCpDesc('');
-                        }}
+                        onPress={resetCouponForm}
                       >
                         <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: 13 }}>
                           Hủy
@@ -557,7 +603,7 @@ export const ProfileModal: React.FC<{
                     )}
                     <Pressable
                       style={[styles.primaryBtn, { backgroundColor: colors.primary }]}
-                      onPress={handleSaveCouponForm}
+                      onPress={() => void handleSaveCouponForm()}
                     >
                       <Text style={{ color: '#FFF', fontWeight: '600', fontSize: 13 }}>
                         {editingCouponId ? 'Cập nhật phiếu' : '+ Thêm vào kho phiếu'}
@@ -582,7 +628,7 @@ export const ProfileModal: React.FC<{
                       }}
                       numberOfLines={1}
                     >
-                      Của {myProfile.nickname} ({myCoupons.length})
+                      Của {myNick.trim() || myProfile.nickname} ({myCoupons.length})
                     </Text>
                   </Pressable>
 
@@ -601,7 +647,7 @@ export const ProfileModal: React.FC<{
                       }}
                       numberOfLines={1}
                     >
-                      Của {partnerProfile.nickname} ({partnerCoupons.length})
+                      Của {partnerNick.trim() || partnerProfile.nickname} ({partnerCoupons.length})
                       {pendingPartnerRequestsCount > 0 ? ` • 🔔 ${pendingPartnerRequestsCount}` : ''}
                     </Text>
                   </Pressable>
@@ -609,8 +655,8 @@ export const ProfileModal: React.FC<{
 
                 <Text style={[styles.helperSubText, { color: colors.textSecondary }]}>
                   {couponOwnerFilter === 'MINE'
-                    ? `Khi bạn bấm "Xin dùng phiếu", ${partnerProfile.nickname} phải bấm "Cho phép" thì phiếu mới được áp dụng.`
-                    : `Đây là các phiếu của ${partnerProfile.nickname}. Khi ${partnerProfile.nickname} muốn dùng, bạn là người bấm "Cho phép" tại đây.`}
+                    ? `Khi bạn bấm "Xin dùng phiếu", ${partnerNick.trim() || partnerProfile.nickname} phải bấm "Cho phép" thì phiếu mới được áp dụng.`
+                    : `Đây là các phiếu của ${partnerNick.trim() || partnerProfile.nickname}. Khi ${partnerNick.trim() || partnerProfile.nickname} muốn dùng, bạn là người bấm "Cho phép" tại đây.`}
                 </Text>
 
                 {activeCouponList.length === 0 ? (
@@ -669,8 +715,8 @@ export const ProfileModal: React.FC<{
                                   ? `✓ Đã được duyệt & sử dụng`
                                   : isPending
                                     ? isMine
-                                      ? `⏳ Chờ ${partnerProfile.nickname} duyệt...`
-                                      : `🔔 ${partnerProfile.nickname} xin dùng!`
+                                      ? `⏳ Chờ ${partnerNick.trim() || partnerProfile.nickname} duyệt...`
+                                      : `🔔 ${partnerNick.trim() || partnerProfile.nickname} xin dùng!`
                                     : 'Sẵn sàng sử dụng'}
                               </Text>
 
@@ -713,7 +759,7 @@ export const ProfileModal: React.FC<{
                                 styles.couponBadge,
                                 { backgroundColor: colors.surfaceVariant },
                               ]}
-                              onPress={() => void handlePartnerApproveOrReject(cp, false)}
+                              onPress={() => void handleCancelMyCouponRequest(cp)}
                             >
                               <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textSecondary }}>
                                 Hủy
@@ -760,7 +806,7 @@ export const ProfileModal: React.FC<{
                               onPress={() => void handlePartnerApproveOrReject(cp, true)}
                             >
                               <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }} numberOfLines={1}>
-                                ✓ Cho phép {partnerProfile.nickname} dùng
+                                ✓ Cho phép {partnerNick.trim() || partnerProfile.nickname} dùng
                               </Text>
                             </Pressable>
 
@@ -890,7 +936,7 @@ export const ProfileModal: React.FC<{
             </Pressable>
             <Pressable
               style={[styles.primaryBtn, { backgroundColor: colors.primary }]}
-              onPress={handleSaveProfile}
+              onPress={() => void handleSaveProfile()}
             >
               <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 14 }}>Lưu thay đổi</Text>
             </Pressable>
