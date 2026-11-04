@@ -370,11 +370,26 @@ function mergeProfilePreservingData(
 
 // Chỉ ghép fallback nếu fallback đó thực sự thuộc về cùng một userId (hoặc chưa gắn userId)
 // Ngăn chặn triệt để lỗi lấy nhầm hồ sơ của Quốc Anh đắp sang cho Trúc Duyên khi đổi tài khoản!
+// 1. Sửa lại hàm safeFallbackForUser (khoảng dòng 289)
 function safeFallbackForUser(
   candidate: Partial<PersonProfile> | null | undefined,
   expectedUserId: string | null | undefined,
+  currentViewerUserId?: string | null,
 ): Partial<PersonProfile> | undefined {
   if (!candidate) return undefined;
+
+  // Nếu đang tìm fallback cho Partner (expectedUserId khác currentViewerUserId)
+  // thì TUYỆT ĐỐI không được nhận candidate có userId của currentViewerUserId!
+  if (
+    currentViewerUserId &&
+    expectedUserId &&
+    String(expectedUserId) !== String(currentViewerUserId) &&
+    candidate.userId &&
+    String(candidate.userId) === String(currentViewerUserId)
+  ) {
+    return undefined;
+  }
+
   if (
     candidate.userId &&
     expectedUserId &&
@@ -389,6 +404,7 @@ function safeFallbackForUser(
   return candidate;
 }
 
+// 2. Sửa lại hàm resolveProfilesForViewer (khoảng dòng 308)
 function resolveProfilesForViewer(
   membersById: Record<string, PersonProfile>,
   currentUserId: string | null,
@@ -405,23 +421,37 @@ function resolveProfilesForViewer(
   }
 
   const myEntry = membersById[currentUserId];
-  const validFallbackMy = safeFallbackForUser(fallbackMy, currentUserId);
+  const validFallbackMy = safeFallbackForUser(fallbackMy, currentUserId, currentUserId);
 
-  // Tìm tất cả các entry không phải của mình (bao gồm cả key thật và key tạm partner_in_...)
-  const partnerEntries = allEntries.filter(([uid]) => String(uid) !== String(currentUserId));
+  const resolvedMy: PersonProfile = {
+    ...mergeProfilePreservingData(DEFAULT_MY_PROFILE, myEntry, validFallbackMy),
+    userId: currentUserId,
+  };
+
+  // Chỉ lấy các entry KHÁC currentUserId và có internal userId cũng KHÁC currentUserId
+  const partnerEntries = allEntries.filter(
+    ([uid, prof]) =>
+      String(uid) !== String(currentUserId) &&
+      (!prof?.userId || String(prof.userId) !== String(currentUserId)),
+  );
+
   const realPartnerPair = partnerEntries.find(
     ([uid]) => !uid.startsWith('partner_in_') && !uid.startsWith('local_'),
   );
   const primaryPartnerPair = realPartnerPair || partnerEntries[0];
+
   const resolvedPartnerId = primaryPartnerPair
     ? primaryPartnerPair[0]
     : fallbackPartner?.userId && String(fallbackPartner.userId) !== String(currentUserId)
       ? fallbackPartner.userId
       : null;
 
-  const validFallbackPartner = safeFallbackForUser(fallbackPartner, resolvedPartnerId);
+  const validFallbackPartner = safeFallbackForUser(
+    fallbackPartner,
+    resolvedPartnerId,
+    currentUserId,
+  );
 
-  // Gộp dữ liệu từ các entry của partner (nhưng bỏ qua nếu có dữ liệu bị trùng với myEntry do lỗi cũ)
   let aggregatedPartner: Partial<PersonProfile> = { ...(validFallbackPartner || {}) };
   for (const [, prof] of partnerEntries) {
     aggregatedPartner = mergeProfilePreservingData(
@@ -430,11 +460,6 @@ function resolveProfilesForViewer(
       aggregatedPartner,
     );
   }
-
-  const resolvedMy: PersonProfile = {
-    ...mergeProfilePreservingData(DEFAULT_MY_PROFILE, myEntry, validFallbackMy),
-    userId: currentUserId,
-  };
 
   const resolvedPartner: PersonProfile = {
     ...mergeProfilePreservingData(
@@ -646,7 +671,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         }
 
         const roomKey = getSharedRoomStorageKey(targetCoupleId, targetUserId);
-        const legacyV6RoomKey = `lovevault_room_shared_v6_${targetCoupleId || (targetUserId ? `single_${targetUserId}` : 'guest')}`;
         const userKey = getUserPrivateStorageKey(targetUserId);
 
         const [rawRoom, rawLegacyV6Room, rawPrivate] = await Promise.all([
@@ -907,7 +931,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           birthDate: existingMe.birthDate || validMyStateFallback?.birthDate || null,
         };
 
-        // 6. Chuẩn hóa hồ sơ Partner (chỉ dùng dữ liệu của Partner, tuyệt đối không lấy nhầm của userId)
+        // 6. Chuẩn hóa hồ sơ Partner
         const existingPartner = mergeProfilePreservingData(
           DEFAULT_PARTNER_PROFILE,
           mergedMembers[finalPartnerKey],
@@ -917,6 +941,38 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           !existingPartner.nickname ||
           existingPartner.nickname === 'Bạn Đời' ||
           existingPartner.nickname === 'Người ấy';
+
+        const myFinalProfile = mergedMembers[userId];
+
+        // Kiểm tra xem từng trường của Partner có bị dính dữ liệu clone từ User 1 hay không
+        const isClonedName =
+          Boolean(partnerName) &&
+          existingPartner.nickname === myFinalProfile.nickname &&
+          partnerName.trim() !== myFinalProfile.nickname;
+
+        const isClonedAvatar =
+          Boolean(existingPartner.avatarUri) &&
+          existingPartner.avatarUri === myFinalProfile.avatarUri &&
+          existingPartner.avatarUri !== cleanAvatarUri(partnerAvatarUrl);
+
+        mergedMembers[finalPartnerKey] = {
+          ...existingPartner,
+          userId: finalPartnerKey,
+          nickname:
+            (isGenericPartnerName || isClonedName) && partnerName
+              ? partnerName.trim()
+              : existingPartner.nickname || 'Người ấy',
+          avatarUri: isClonedAvatar
+            ? cleanAvatarUri(partnerAvatarUrl) || null
+            : cleanAvatarUri(existingPartner.avatarUri) ||
+              cleanAvatarUri(stashedPartnerData.avatarUri) ||
+              cleanAvatarUri(partnerAvatarUrl) ||
+              null,
+          birthDate:
+            existingPartner.birthDate ||
+            stashedPartnerData.birthDate ||
+            null,
+        };
 
         // Phát hiện nếu do lỗi phiên bản cũ mà hồ sơ Partner bị sao chép y hệt ngày sinh & tên của chính mình
         const isCorruptedCloneOfMe =

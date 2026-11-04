@@ -249,49 +249,64 @@ export const ProfileModal: React.FC<{
   }, [coupleId]);
 
   // Đồng bộ state từ Store (+ Backup theo đúng ID từng người) khi Modal được mở ra
-  useEffect(() => {
-    if (visible && !prevVisibleRef.current) {
-      isDirtyRef.current = false;
-      setMyNick(myProfile.nickname);
-      setPartnerNick(partnerProfile.nickname);
-      setMyMood(myProfile.moodEmoji);
-      setMyAvatarBroken(false);
-      setPartnerAvatarBroken(false);
+  // File: src/components/home/modals/ProfileModal.tsx
 
-      const cleanMyAvatar = sanitizeAvatarUri(myProfile.avatarUri);
-      const cleanPartnerAvatar = sanitizeAvatarUri(partnerProfile.avatarUri);
+// 1. Tại useEffect đồng bộ khi mở Modal (Dòng 195 - 238):
+useEffect(() => {
+  if (visible && !prevVisibleRef.current) {
+    isDirtyRef.current = false;
+    setMyNick(myProfile.nickname);
+    setPartnerNick(partnerProfile.nickname);
+    setMyMood(myProfile.moodEmoji);
+    setMyAvatarBroken(false);
+    setPartnerAvatarBroken(false);
 
-      setMyBirthIso(myProfile.birthDate || null);
-      setPartnerBirthIso(partnerProfile.birthDate || null);
-      setMyAvatarUri(cleanMyAvatar);
-      setPartnerAvatarUri(cleanPartnerAvatar);
+    const cleanMyAvatar = sanitizeAvatarUri(myProfile.avatarUri);
+    const cleanPartnerAvatar = sanitizeAvatarUri(partnerProfile.avatarUri);
 
-      // Kiểm tra thêm từ backup theo đúng userId thực tế của từng người
-      if (currentUserId) {
-        const partnerKey = partnerProfile.userId || 'partner';
-        void readProfileBackup(backupKey).then((backup) => {
-          if (!backup?.membersById || isDirtyRef.current) return;
-          const myBackup = backup.membersById[currentUserId];
-          const partnerBackup = backup.membersById[partnerKey];
+    setMyBirthIso(myProfile.birthDate || null);
+    setPartnerBirthIso(partnerProfile.birthDate || null);
+    setMyAvatarUri(cleanMyAvatar);
+    setPartnerAvatarUri(cleanPartnerAvatar);
 
-          if (myBackup) {
-            setMyBirthIso((cur) => cur || myBackup.birthDate || null);
-            setMyAvatarUri((cur) => cur || sanitizeAvatarUri(myBackup.avatarUri));
+    if (currentUserId) {
+      // Đảm bảo partnerKey KHÔNG BAO GIỜ trùng với currentUserId
+      const safePartnerKey =
+        partnerProfile.userId && String(partnerProfile.userId) !== String(currentUserId)
+          ? partnerProfile.userId
+          : `partner_of_${currentUserId}`;
+
+      void readProfileBackup(backupKey).then((backup) => {
+        if (!backup?.membersById || isDirtyRef.current) return;
+        const myBackup = backup.membersById[currentUserId];
+        const partnerBackup = backup.membersById[safePartnerKey];
+
+        if (myBackup) {
+          setMyBirthIso((cur) => cur || myBackup.birthDate || null);
+          setMyAvatarUri((cur) => cur || sanitizeAvatarUri(myBackup.avatarUri));
+        }
+        if (partnerBackup) {
+          // Không lấy backup của partner nếu nó bị trùng y hệt avatar của mình do lỗi cũ
+          const backupPartnerAvatar = sanitizeAvatarUri(partnerBackup.avatarUri);
+          const isClonedFromMe =
+            backupPartnerAvatar &&
+            (backupPartnerAvatar === cleanMyAvatar || backupPartnerAvatar === myBackup?.avatarUri);
+
+          setPartnerBirthIso((cur) => cur || partnerBackup.birthDate || null);
+          if (!isClonedFromMe) {
+            setPartnerAvatarUri((cur) => cur || backupPartnerAvatar);
           }
-          if (partnerBackup) {
-            setPartnerBirthIso((cur) => cur || partnerBackup.birthDate || null);
-            setPartnerAvatarUri((cur) => cur || sanitizeAvatarUri(partnerBackup.avatarUri));
-          }
-        });
-      }
-
-      setFavDrink(myPrivateNote.favDrink);
-      setShoeClothSize(myPrivateNote.shoeClothSize);
-      setHowToComfort(myPrivateNote.howToComfort);
-      setSecretNote(myPrivateNote.secretNote || '');
+        }
+      });
     }
-    prevVisibleRef.current = visible;
-  }, [visible, backupKey, currentUserId, myProfile, partnerProfile, myPrivateNote]);
+
+    setFavDrink(myPrivateNote.favDrink);
+    setShoeClothSize(myPrivateNote.shoeClothSize);
+    setHowToComfort(myPrivateNote.howToComfort);
+    setSecretNote(myPrivateNote.secretNote || '');
+  }
+  prevVisibleRef.current = visible;
+}, [visible, backupKey, currentUserId, myProfile, partnerProfile, myPrivateNote]);
 
   // Nếu dữ liệu từ Server đồng bộ về sau khi Modal đang mở (và người dùng chưa tự tay sửa gì), tự cập nhật lên UI
   useEffect(() => {
@@ -480,8 +495,13 @@ export const ProfileModal: React.FC<{
     const finalPartnerBirth = partnerBirthIso || null;
 
     // 1. Lưu bản sao dự phòng cục bộ theo ID từng người
+    // 1. Lưu bản sao dự phòng cục bộ theo ID từng người
     if (currentUserId) {
-      const partnerKey = partnerProfile.userId || 'partner';
+      const safePartnerKey =
+        partnerProfile.userId && String(partnerProfile.userId) !== String(currentUserId)
+          ? partnerProfile.userId
+          : `partner_of_${currentUserId}`;
+
       const existingBackup = await readProfileBackup(backupKey);
       await writeProfileBackup(backupKey, {
         membersById: {
@@ -491,7 +511,7 @@ export const ProfileModal: React.FC<{
             birthDate: finalMyBirth,
             avatarUri: permanentMyAvatar,
           },
-          [partnerKey]: {
+          [safePartnerKey]: {
             nickname: partnerNick.trim() || 'Người ấy',
             birthDate: finalPartnerBirth,
             avatarUri: permanentPartnerAvatar,
