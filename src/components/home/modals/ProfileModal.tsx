@@ -19,7 +19,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import { useAuthStore } from '../../../store/useAuthStore';
 import { ThemeColors, getZodiacSign } from '../../../constants/theme';
-import { useSettingsStore, LoveCouponItem } from '../../../store/useSettingsStore';
+import { useSettingsStore, LoveCouponItem, PersonProfile } from '../../../store/useSettingsStore';
 import {
   MOOD_LIST,
   FUN_DATE_IDEAS,
@@ -27,7 +27,7 @@ import {
 } from './modalConstantsAndUtils';
 import { styles } from './modalSharedStyles';
 
-const PARTNER_BACKUP_KEY_PREFIX = 'lovevault_couple_profile_backup_';
+const PARTNER_BACKUP_KEY_PREFIX = 'lovevault_couple_profile_backup_v2_';
 
 // Kiểm tra xem URI ảnh có hợp lệ hay là link blob cũ đã bị trình duyệt hủy
 const sanitizeAvatarUri = (uri: string | null | undefined): string | null => {
@@ -128,12 +128,15 @@ const saveAvatarPermanently = async (
   }
 };
 
+interface MemberBackupEntry {
+  nickname?: string;
+  birthDate: string | null;
+  avatarUri: string | null;
+}
+
 interface ProfileBackupPayload {
-  myBirthDate: string | null;
-  myAvatarUri: string | null;
-  partnerNickname?: string;
-  partnerBirthDate: string | null;
-  partnerAvatarUri: string | null;
+  // Lưu tách biệt theo ID thực tế của từng thành viên, tuyệt đối không lưu my.../partner... chung cho cả phòng
+  membersById: Record<string, MemberBackupEntry>;
 }
 
 const readProfileBackup = async (backupKey: string): Promise<ProfileBackupPayload | null> => {
@@ -179,8 +182,11 @@ export const ProfileModal: React.FC<{
   onClose: () => void;
 }> = ({ visible, colors, coupleId, onClose }) => {
   const { user } = useAuthStore();
-  const currentUserId = user?.id || useSettingsStore.getState().activeUserId || 'local_me';
-  const backupKey = `${PARTNER_BACKUP_KEY_PREFIX}${coupleId || currentUserId}`;
+  const activeStoreUserId = useSettingsStore((s) => s.activeUserId);
+  const currentUserId = user?.id || activeStoreUserId || null;
+
+  // Khóa backup gắn với cả coupleId VÀ currentUserId để không bao giờ bị lẫn giữa 2 tài khoản
+  const backupKey = `${PARTNER_BACKUP_KEY_PREFIX}${coupleId || 'no_couple'}_${currentUserId || 'guest'}`;
 
   const {
     myProfile,
@@ -232,68 +238,20 @@ export const ProfileModal: React.FC<{
   const [randomIdea, setRandomIdea] = useState<string>(FUN_DATE_IDEAS[0]);
 
   const prevVisibleRef = useRef(false);
-  const restoredBackupRef = useRef(false);
+  const isDirtyRef = useRef(false);
 
-  // Tự động khôi phục ngày sinh & avatar của người thương nếu Store bị reset/null khi mới mở lại app
+  // Xóa bộ nhớ backup v1 cũ (nếu có) từng gây lỗi trộn hồ sơ giữa 2 tài khoản
   useEffect(() => {
-    let mounted = true;
-    const restoreIfMissing = async () => {
-      const cleanMyStoreAvatar = sanitizeAvatarUri(myProfile.avatarUri);
-      const cleanPartnerStoreAvatar = sanitizeAvatarUri(partnerProfile.avatarUri);
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage && coupleId) {
+      const legacyKey = `lovevault_couple_profile_backup_${coupleId}`;
+      window.localStorage.removeItem(legacyKey);
+    }
+  }, [coupleId]);
 
-      // Nếu phát hiện avatar trong store là link blob chết trên web thì làm sạch ngay để không bị trắng xóa
-      const hasDeadMyBlob = Boolean(myProfile.avatarUri && !cleanMyStoreAvatar);
-      const hasDeadPartnerBlob = Boolean(partnerProfile.avatarUri && !cleanPartnerStoreAvatar);
-
-      const backup = await readProfileBackup(backupKey);
-      if (!mounted) return;
-
-      const nextMyBirth = myProfile.birthDate || backup?.myBirthDate || null;
-      const nextMyAvatar = cleanMyStoreAvatar || sanitizeAvatarUri(backup?.myAvatarUri) || null;
-      const nextPartnerBirth = partnerProfile.birthDate || backup?.partnerBirthDate || null;
-      const nextPartnerAvatar =
-        cleanPartnerStoreAvatar || sanitizeAvatarUri(backup?.partnerAvatarUri) || null;
-
-      const needRestoreMy =
-        hasDeadMyBlob ||
-        (!myProfile.birthDate && Boolean(nextMyBirth)) ||
-        (!cleanMyStoreAvatar && Boolean(nextMyAvatar));
-      const needRestorePartner =
-        hasDeadPartnerBlob ||
-        (!partnerProfile.birthDate && Boolean(nextPartnerBirth)) ||
-        (!cleanPartnerStoreAvatar && Boolean(nextPartnerAvatar));
-
-      if ((needRestoreMy || needRestorePartner) && !restoredBackupRef.current) {
-        restoredBackupRef.current = true;
-        await updateProfiles(
-          {
-            birthDate: nextMyBirth,
-            avatarUri: nextMyAvatar,
-          },
-          {
-            birthDate: nextPartnerBirth,
-            avatarUri: nextPartnerAvatar,
-          },
-        );
-      }
-    };
-
-    void restoreIfMissing();
-    return () => {
-      mounted = false;
-    };
-  }, [
-    backupKey,
-    myProfile.birthDate,
-    myProfile.avatarUri,
-    partnerProfile.birthDate,
-    partnerProfile.avatarUri,
-    updateProfiles,
-  ]);
-
-  // Đồng bộ state từ Store (+ Backup) khi Modal được mở ra
+  // Đồng bộ state từ Store (+ Backup theo đúng ID từng người) khi Modal được mở ra
   useEffect(() => {
     if (visible && !prevVisibleRef.current) {
+      isDirtyRef.current = false;
       setMyNick(myProfile.nickname);
       setPartnerNick(partnerProfile.nickname);
       setMyMood(myProfile.moodEmoji);
@@ -308,14 +266,24 @@ export const ProfileModal: React.FC<{
       setMyAvatarUri(cleanMyAvatar);
       setPartnerAvatarUri(cleanPartnerAvatar);
 
-      // Kiểm tra thêm từ backup phòng trường hợp store vừa bị ghi đè null
-      void readProfileBackup(backupKey).then((backup) => {
-        if (!backup) return;
-        setMyBirthIso((cur) => cur || backup.myBirthDate || null);
-        setPartnerBirthIso((cur) => cur || backup.partnerBirthDate || null);
-        setMyAvatarUri((cur) => cur || sanitizeAvatarUri(backup.myAvatarUri));
-        setPartnerAvatarUri((cur) => cur || sanitizeAvatarUri(backup.partnerAvatarUri));
-      });
+      // Kiểm tra thêm từ backup theo đúng userId thực tế của từng người
+      if (currentUserId) {
+        const partnerKey = partnerProfile.userId || 'partner';
+        void readProfileBackup(backupKey).then((backup) => {
+          if (!backup?.membersById || isDirtyRef.current) return;
+          const myBackup = backup.membersById[currentUserId];
+          const partnerBackup = backup.membersById[partnerKey];
+
+          if (myBackup) {
+            setMyBirthIso((cur) => cur || myBackup.birthDate || null);
+            setMyAvatarUri((cur) => cur || sanitizeAvatarUri(myBackup.avatarUri));
+          }
+          if (partnerBackup) {
+            setPartnerBirthIso((cur) => cur || partnerBackup.birthDate || null);
+            setPartnerAvatarUri((cur) => cur || sanitizeAvatarUri(partnerBackup.avatarUri));
+          }
+        });
+      }
 
       setFavDrink(myPrivateNote.favDrink);
       setShoeClothSize(myPrivateNote.shoeClothSize);
@@ -323,7 +291,26 @@ export const ProfileModal: React.FC<{
       setSecretNote(myPrivateNote.secretNote || '');
     }
     prevVisibleRef.current = visible;
-  }, [visible, backupKey, myProfile, partnerProfile, myPrivateNote]);
+  }, [visible, backupKey, currentUserId, myProfile, partnerProfile, myPrivateNote]);
+
+  // Nếu dữ liệu từ Server đồng bộ về sau khi Modal đang mở (và người dùng chưa tự tay sửa gì), tự cập nhật lên UI
+  useEffect(() => {
+    if (!visible || isDirtyRef.current) return;
+    setMyNick(myProfile.nickname);
+    setPartnerNick(partnerProfile.nickname);
+    setMyBirthIso(myProfile.birthDate || null);
+    setPartnerBirthIso(partnerProfile.birthDate || null);
+    setMyAvatarUri(sanitizeAvatarUri(myProfile.avatarUri));
+    setPartnerAvatarUri(sanitizeAvatarUri(partnerProfile.avatarUri));
+  }, [
+    visible,
+    myProfile.nickname,
+    myProfile.birthDate,
+    myProfile.avatarUri,
+    partnerProfile.nickname,
+    partnerProfile.birthDate,
+    partnerProfile.avatarUri,
+  ]);
 
   const openDatePicker = (target: 'ME' | 'PARTNER') => {
     lastPickingTargetRef.current = target;
@@ -381,6 +368,7 @@ export const ProfileModal: React.FC<{
       base64: true,
     });
     if (!res.canceled && res.assets?.[0]) {
+      isDirtyRef.current = true;
       const asset = res.assets[0];
       const permanentDataUri = await saveAvatarPermanently(asset.uri, asset.base64);
       if (target === 'ME') {
@@ -483,7 +471,7 @@ export const ProfileModal: React.FC<{
     );
   };
 
-  // Lưu toàn bộ thông tin profile & avatar vĩnh viễn
+  // Lưu toàn bộ thông tin profile & avatar vĩnh viễn theo ID từng thành viên
   const handleSaveProfile = async () => {
     const permanentMyAvatar = await saveAvatarPermanently(myAvatarUri);
     const permanentPartnerAvatar = await saveAvatarPermanently(partnerAvatarUri);
@@ -491,14 +479,26 @@ export const ProfileModal: React.FC<{
     const finalMyBirth = myBirthIso || null;
     const finalPartnerBirth = partnerBirthIso || null;
 
-    // 1. Lưu bản sao dự phòng cục bộ trước để tránh bị mất khi thoát app / reload
-    await writeProfileBackup(backupKey, {
-      myBirthDate: finalMyBirth,
-      myAvatarUri: permanentMyAvatar,
-      partnerNickname: partnerNick.trim() || 'Người ấy',
-      partnerBirthDate: finalPartnerBirth,
-      partnerAvatarUri: permanentPartnerAvatar,
-    });
+    // 1. Lưu bản sao dự phòng cục bộ theo ID từng người
+    if (currentUserId) {
+      const partnerKey = partnerProfile.userId || 'partner';
+      const existingBackup = await readProfileBackup(backupKey);
+      await writeProfileBackup(backupKey, {
+        membersById: {
+          ...(existingBackup?.membersById || {}),
+          [currentUserId]: {
+            nickname: myNick.trim() || 'Bạn',
+            birthDate: finalMyBirth,
+            avatarUri: permanentMyAvatar,
+          },
+          [partnerKey]: {
+            nickname: partnerNick.trim() || 'Người ấy',
+            birthDate: finalPartnerBirth,
+            avatarUri: permanentPartnerAvatar,
+          },
+        },
+      });
+    }
 
     // 2. Cập nhật Store đồng thời cả Tên, Ngày sinh và Avatar vĩnh viễn
     await updateProfiles(
@@ -524,6 +524,7 @@ export const ProfileModal: React.FC<{
       secretNote,
     });
 
+    isDirtyRef.current = false;
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     onClose();
   };
@@ -607,7 +608,10 @@ export const ProfileModal: React.FC<{
                         { backgroundColor: colors.surfaceVariant },
                         myMood === emoji && { borderColor: colors.primary, borderWidth: 1.5 },
                       ]}
-                      onPress={() => setMyMood(emoji)}
+                      onPress={() => {
+                        isDirtyRef.current = true;
+                        setMyMood(emoji);
+                      }}
                     >
                       <Text style={styles.moodChipEmoji}>{emoji}</Text>
                     </Pressable>
@@ -663,7 +667,10 @@ export const ProfileModal: React.FC<{
                   <TextInput
                     style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
                     value={myNick}
-                    onChangeText={setMyNick}
+                    onChangeText={(txt) => {
+                      isDirtyRef.current = true;
+                      setMyNick(txt);
+                    }}
                     placeholder="Biệt danh của bạn trong phòng"
                     placeholderTextColor={colors.textSecondary}
                   />
@@ -737,7 +744,10 @@ export const ProfileModal: React.FC<{
                   <TextInput
                     style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
                     value={partnerNick}
-                    onChangeText={setPartnerNick}
+                    onChangeText={(txt) => {
+                      isDirtyRef.current = true;
+                      setPartnerNick(txt);
+                    }}
                     placeholder="Biệt danh của người thương"
                     placeholderTextColor={colors.textSecondary}
                   />
@@ -782,6 +792,7 @@ export const ProfileModal: React.FC<{
                     return new Date(2002, 0, 1);
                   })()}
                   onChange={(selected) => {
+                    isDirtyRef.current = true;
                     const iso = toIsoDate(selected);
                     const target = pickingTarget || lastPickingTargetRef.current;
                     if (target === 'ME') {

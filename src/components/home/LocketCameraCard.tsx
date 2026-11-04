@@ -33,7 +33,6 @@ import {
 } from './LocketIcons';
 
 type FlashChoice = 'off' | 'auto' | 'on';
-export type LensMode = '0.5x' | '1x';
 
 const FLASH_CYCLE: ReadonlyArray<FlashChoice> = ['off', 'auto', 'on'];
 const FLASH_LABEL: Record<FlashChoice, string> = {
@@ -291,7 +290,6 @@ async function enforceFullSensor4By3(track: MediaStreamTrack) {
     const h = settings.height || 0;
     const ratio = w > 0 && h > 0 ? Math.max(w, h) / Math.min(w, h) : 1.333;
 
-    // Nếu trình duyệt đang mở ở tỷ lệ 16:9 (~1.77), ép về 4:3 (~1.33) để lấy trọn chiều dọc cảm biến
     if (ratio > 1.5 && typeof track.applyConstraints === 'function') {
       await track.applyConstraints({
         aspectRatio: { ideal: 4 / 3 },
@@ -304,7 +302,7 @@ async function enforceFullSensor4By3(track: MediaStreamTrack) {
   }
 }
 
-// Mở stream với cấu hình 4:3 chuẩn toàn cảm biến (tránh truyền height: 1080 gây nhảy sang 1920x1080 16:9)
+// Mở stream với cấu hình 4:3 chuẩn toàn cảm biến
 async function openSensorStream(
   constraintTarget: { deviceId?: string; facingMode?: 'user' | 'environment' },
 ): Promise<MediaStream | null> {
@@ -389,11 +387,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   const [isSending, setIsSending] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
-
-  // Mặc định luôn mở ở chế độ '0.5x' góc siêu rộng như Locket
-  const [lensMode, setLensMode] = useState<LensMode>('0.5x');
-  // Hệ số zoom bổ trợ bằng CSS/Canvas khi phần cứng chỉ có 1 ống kính cố định
-  const [webSoftwareScale, setWebSoftwareScale] = useState<number>(1);
 
   const [myAvatarLoadErr, setMyAvatarLoadErr] = useState(false);
   const [partnerAvatarLoadErr, setPartnerAvatarLoadErr] = useState(false);
@@ -494,283 +487,171 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     }
   }, [shouldMountCamera]);
 
-  // TRÌNH ĐIỀU KHIỂN CAMERA ĐỘC LẬP TRÊN WEB (Không dùng CameraView của expo-camera để tránh xung đột)
-  const syncWebCameraStream = useCallback(
-    async (targetFacing: CameraType, targetLensMode: LensMode) => {
-      if (Platform.OS !== 'web' || typeof document === 'undefined' || !navigator?.mediaDevices) {
-        return;
+  // Luôn mở camera ở góc rộng tối đa trên Web (tương tự Locket gốc)
+  const syncWebCameraStream = useCallback(async (targetFacing: CameraType) => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined' || !navigator?.mediaDevices) {
+      return;
+    }
+
+    const requestId = ++webRequestIdRef.current;
+
+    try {
+      // Giải phóng hoàn toàn luồng camera cũ trước khi mở ống kính mới
+      if (activeWebStreamRef.current) {
+        stopMediaStream(activeWebStreamRef.current);
+        activeWebStreamRef.current = null;
+      }
+      if (webVideoRef.current) {
+        webVideoRef.current.srcObject = null;
       }
 
-      const requestId = ++webRequestIdRef.current;
-
-      try {
-        // Trường hợp 1: Đang có sẵn Stream của đúng chiều Camera (front/back) và Track đó hỗ trợ chỉnh zoom trực tiếp
-        const existingStream = activeWebStreamRef.current;
-        const existingTrack = existingStream?.getVideoTracks()?.[0];
-        const existingFacing = existingTrack?.getSettings?.()?.facingMode;
-
-        const isSameFacing =
-          existingTrack &&
-          existingTrack.readyState === 'live' &&
-          ((targetFacing === 'front' && existingFacing === 'user') ||
-            (targetFacing === 'back' && existingFacing === 'environment'));
-
-        if (isSameFacing && existingTrack) {
-          const caps = (existingTrack as any).getCapabilities?.() || {};
-          const minZoom: number = caps.zoom?.min ?? 1;
-          const maxZoom: number = caps.zoom?.max ?? 1;
-
-          // Nếu là camera trước: không cần mở lại phần cứng, chỉ chỉnh zoom về minZoom và dùng scale cho 1x
-          if (targetFacing === 'front') {
-            if (caps.zoom && typeof (existingTrack as any).applyConstraints === 'function') {
-              await (existingTrack as any)
-                .applyConstraints({ advanced: [{ zoom: minZoom }] })
-                .catch(() => null);
-            }
-            if (requestId === webRequestIdRef.current) {
-              setWebSoftwareScale(targetLensMode === '1x' ? 1.2 : 1);
-              setIsCameraReady(true);
-            }
-            return;
-          }
-
-          // Nếu là camera sau và Track hiện tại hỗ trợ zoom lùi < 1.0 (0.5x - Nx trên cùng 1 logical camera)
-          if (
-            targetFacing === 'back' &&
-            caps.zoom &&
-            minZoom < 1 &&
-            typeof (existingTrack as any).applyConstraints === 'function'
-          ) {
-            const desiredZoom = targetLensMode === '0.5x' ? minZoom : 1.0;
-            await (existingTrack as any)
-              .applyConstraints({ advanced: [{ zoom: desiredZoom }] })
-              .catch(() => null);
-            if (requestId === webRequestIdRef.current) {
-              setWebSoftwareScale(1);
-              setIsCameraReady(true);
-            }
-            return;
-          }
-        }
-
-        // Trường hợp 2: Cần mở mới hoặc chuyển đổi phần cứng ống kính
-        // BƯỚC QUAN TRỌNG NHẤT: Phải stop() hoàn toàn stream cũ TRƯỚC KHI gọi getUserMedia mới trên Android!
-        if (activeWebStreamRef.current) {
-          stopMediaStream(activeWebStreamRef.current);
-          activeWebStreamRef.current = null;
-        }
-        if (webVideoRef.current) {
-          webVideoRef.current.srcObject = null;
-        }
-
-        // Xử lý mở Camera Trước
-        if (targetFacing === 'front') {
-          const frontStream = await openSensorStream({ facingMode: 'user' });
-          if (requestId !== webRequestIdRef.current) {
-            stopMediaStream(frontStream);
-            return;
-          }
-          if (!frontStream) {
-            setCameraError('Không mở được camera trước. Hãy kiểm tra quyền truy cập.');
-            return;
-          }
-
-          const fTrack = frontStream.getVideoTracks()[0];
-          const fCaps = (fTrack as any)?.getCapabilities?.() || {};
-          if (fCaps.zoom && typeof (fTrack as any).applyConstraints === 'function') {
-            await (fTrack as any)
-              .applyConstraints({ advanced: [{ zoom: fCaps.zoom.min ?? 1 }] })
-              .catch(() => null);
-          }
-
-          activeWebStreamRef.current = frontStream;
-          setWebSoftwareScale(targetLensMode === '1x' ? 1.2 : 1);
-          if (webVideoRef.current) {
-            webVideoRef.current.srcObject = frontStream;
-            await webVideoRef.current.play().catch(() => null);
-          }
-          setIsCameraReady(true);
-          setCameraError(null);
-          return;
-        }
-
-        // Xử lý mở Camera Sau (Back Camera)
-        let devices: MediaDeviceInfo[] = [];
-        if (navigator.mediaDevices.enumerateDevices) {
-          const all = await navigator.mediaDevices.enumerateDevices();
-          devices = all.filter((d) => d.kind === 'videoinput');
-        }
-
-        const backCams = devices.filter(
-          (d) =>
-            /(back|rear|environment|sau|0\.5|ultra|wide|camera2 0|camera2 2|camera2 3|camera2 4)/i.test(
-              d.label,
-            ) && !/(tele|depth|mono|macro|front|trước|camera2 1)/i.test(d.label),
-        );
-
-        const mainBackCam =
-          backCams.find(
-            (d) =>
-              /(main|primary|standard|back 0|camera 0|camera2 0)/i.test(d.label) &&
-              !/(ultra|0\.5|0,5|uw)/i.test(d.label),
-          ) || backCams[0];
-
-        // 2A. Nếu người dùng chọn 1x: Luôn mở ống kính chính (camera2 0 / environment)
-        if (targetLensMode === '1x') {
-          const mainStream = await openSensorStream({
-            deviceId: mainBackCam?.deviceId,
-            facingMode: 'environment',
-          });
-          if (requestId !== webRequestIdRef.current) {
-            stopMediaStream(mainStream);
-            return;
-          }
-          if (!mainStream) {
-            setCameraError('Không mở được camera sau.');
-            return;
-          }
-
-          const mTrack = mainStream.getVideoTracks()[0];
-          const mCaps = (mTrack as any)?.getCapabilities?.() || {};
-          const minZ: number = mCaps.zoom?.min ?? 1;
-          const maxZ: number = mCaps.zoom?.max ?? 1;
-
-          // Kiểm tra xem máy có ống kính Ultra-Wide riêng hay dải zoom < 1 không
-          const hasDedicatedUltra =
-            minZ < 1 ||
-            backCams.some((d) => /(ultra|0\.5|0,5|uw|wide-angle)/i.test(d.label)) ||
-            backCams.length > 1;
-
-          if (mCaps.zoom && typeof (mTrack as any).applyConstraints === 'function') {
-            const targetZ =
-              minZ < 1 ? 1.0 : hasDedicatedUltra ? minZ : Math.min(maxZ, minZ * 1.28);
-            await (mTrack as any)
-              .applyConstraints({ advanced: [{ zoom: targetZ }] })
-              .catch(() => null);
-            setWebSoftwareScale(1);
-          } else {
-            setWebSoftwareScale(hasDedicatedUltra ? 1 : 1.25);
-          }
-
-          activeWebStreamRef.current = mainStream;
-          if (webVideoRef.current) {
-            webVideoRef.current.srcObject = mainStream;
-            await webVideoRef.current.play().catch(() => null);
-          }
-          setIsCameraReady(true);
-          setCameraError(null);
-          return;
-        }
-
-        // 2B. Nếu người dùng chọn 0.5x (Mặc định):
-        // Bước 1: Tìm ống kính có tên tường minh là Ultra-Wide trước
-        const explicitUltraCam = backCams.find((d) =>
-          /(ultra|0\.5|0,5|uw|wide-angle)/i.test(d.label),
-        );
-
-        let chosenStream: MediaStream | null = null;
-
-        if (explicitUltraCam?.deviceId) {
-          chosenStream = await openSensorStream({ deviceId: explicitUltraCam.deviceId });
-        }
-
-        // Bước 2: Mở ống kính chính để kiểm tra xem nó có hỗ trợ zoom.min < 1 (0.5x tích hợp) không
-        if (!chosenStream) {
-          const primaryStream = await openSensorStream({
-            deviceId: mainBackCam?.deviceId,
-            facingMode: 'environment',
-          });
-
-          if (primaryStream) {
-            const pTrack = primaryStream.getVideoTracks()[0];
-            const pCaps = (pTrack as any)?.getCapabilities?.() || {};
-            const pMinZoom: number = pCaps.zoom?.min ?? 1;
-
-            // Nếu ống kính chính hỗ trợ zoom < 1 (VD: 0.5x hoặc 0.6x), dùng luôn ống kính chính ở mức minZoom!
-            if (pMinZoom < 1 && typeof (pTrack as any).applyConstraints === 'function') {
-              await (pTrack as any)
-                .applyConstraints({ advanced: [{ zoom: pMinZoom }] })
-                .catch(() => null);
-              chosenStream = primaryStream;
-            } else if (backCams.length > 1) {
-              // Nếu ống kính chính có minZoom >= 1, thử tìm ống kính phụ Ultra-Wide (nhưng loại trừ Macro/Depth)
-              const mainId = pTrack.getSettings?.()?.deviceId || mainBackCam?.deviceId;
-              const auxCandidates = backCams
-                .filter((d) => d.deviceId && d.deviceId !== mainId)
-                .reverse(); // Trên Android, Ultra-Wide thường nằm ở cuối danh sách camera2
-
-              // Phải tắt primaryStream trước khi thử mở auxCandidate để Android không báo lỗi NotReadableError
-              stopMediaStream(primaryStream);
-
-              for (const candidate of auxCandidates) {
-                const candidateStream = await openSensorStream({ deviceId: candidate.deviceId });
-                if (candidateStream) {
-                  const cTrack = candidateStream.getVideoTracks()[0];
-                  if (!isLikelyMacroOrDepthTrack(cTrack)) {
-                    chosenStream = candidateStream;
-                    break;
-                  }
-                  stopMediaStream(candidateStream);
-                }
-              }
-
-              // Nếu không có ống kính phụ nào hợp lệ, mở lại ống kính chính ở góc rộng 4:3 tối đa
-              if (!chosenStream) {
-                chosenStream = await openSensorStream({
-                  deviceId: mainBackCam?.deviceId,
-                  facingMode: 'environment',
-                });
-              }
-            } else {
-              chosenStream = primaryStream;
-            }
-          }
-        }
-
+      // 1. Mở Camera Trước ở góc rộng nhất
+      if (targetFacing === 'front') {
+        const frontStream = await openSensorStream({ facingMode: 'user' });
         if (requestId !== webRequestIdRef.current) {
-          stopMediaStream(chosenStream);
+          stopMediaStream(frontStream);
+          return;
+        }
+        if (!frontStream) {
+          setCameraError('Không mở được camera trước. Hãy kiểm tra quyền truy cập.');
           return;
         }
 
-        if (!chosenStream) {
-          setCameraError('Không mở được ống kính góc rộng.');
-          return;
-        }
-
-        // Đảm bảo luôn đặt zoom ở mức nhỏ nhất (rộng nhất) trên ống kính 0.5x đã chọn
-        const finalTrack = chosenStream.getVideoTracks()[0];
-        const finalCaps = (finalTrack as any)?.getCapabilities?.() || {};
-        if (finalCaps.zoom && typeof (finalTrack as any).applyConstraints === 'function') {
-          await (finalTrack as any)
-            .applyConstraints({ advanced: [{ zoom: finalCaps.zoom.min ?? 1 }] })
+        const fTrack = frontStream.getVideoTracks()[0];
+        const fCaps = (fTrack as any)?.getCapabilities?.() || {};
+        if (fCaps.zoom && typeof (fTrack as any).applyConstraints === 'function') {
+          await (fTrack as any)
+            .applyConstraints({ advanced: [{ zoom: fCaps.zoom.min ?? 1 }] })
             .catch(() => null);
         }
 
-        activeWebStreamRef.current = chosenStream;
-        setWebSoftwareScale(1);
+        activeWebStreamRef.current = frontStream;
         if (webVideoRef.current) {
-          webVideoRef.current.srcObject = chosenStream;
+          webVideoRef.current.srcObject = frontStream;
           await webVideoRef.current.play().catch(() => null);
         }
         setIsCameraReady(true);
         setCameraError(null);
-      } catch {
-        if (requestId === webRequestIdRef.current) {
-          setCameraError('Ống kính đang bận, hãy bấm thử mở lại.');
+        return;
+      }
+
+      // 2. Mở Camera Sau ở góc rộng nhất
+      let devices: MediaDeviceInfo[] = [];
+      if (navigator.mediaDevices.enumerateDevices) {
+        const all = await navigator.mediaDevices.enumerateDevices();
+        devices = all.filter((d) => d.kind === 'videoinput');
+      }
+
+      const backCams = devices.filter(
+        (d) =>
+          /(back|rear|environment|sau|0\.5|ultra|wide|camera2 0|camera2 2|camera2 3|camera2 4)/i.test(
+            d.label,
+          ) && !/(tele|depth|mono|macro|front|trước|camera2 1)/i.test(d.label),
+      );
+
+      const mainBackCam =
+        backCams.find(
+          (d) =>
+            /(main|primary|standard|back 0|camera 0|camera2 0)/i.test(d.label) &&
+            !/(ultra|0\.5|0,5|uw)/i.test(d.label),
+        ) || backCams[0];
+
+      const explicitUltraCam = backCams.find((d) =>
+        /(ultra|0\.5|0,5|uw|wide-angle)/i.test(d.label),
+      );
+
+      let chosenStream: MediaStream | null = null;
+
+      if (explicitUltraCam?.deviceId) {
+        chosenStream = await openSensorStream({ deviceId: explicitUltraCam.deviceId });
+      }
+
+      if (!chosenStream) {
+        const primaryStream = await openSensorStream({
+          deviceId: mainBackCam?.deviceId,
+          facingMode: 'environment',
+        });
+
+        if (primaryStream) {
+          const pTrack = primaryStream.getVideoTracks()[0];
+          const pCaps = (pTrack as any)?.getCapabilities?.() || {};
+          const pMinZoom: number = pCaps.zoom?.min ?? 1;
+
+          if (pMinZoom < 1 && typeof (pTrack as any).applyConstraints === 'function') {
+            await (pTrack as any)
+              .applyConstraints({ advanced: [{ zoom: pMinZoom }] })
+              .catch(() => null);
+            chosenStream = primaryStream;
+          } else if (backCams.length > 1) {
+            const mainId = pTrack.getSettings?.()?.deviceId || mainBackCam?.deviceId;
+            const auxCandidates = backCams
+              .filter((d) => d.deviceId && d.deviceId !== mainId)
+              .reverse();
+
+            stopMediaStream(primaryStream);
+
+            for (const candidate of auxCandidates) {
+              const candidateStream = await openSensorStream({ deviceId: candidate.deviceId });
+              if (candidateStream) {
+                const cTrack = candidateStream.getVideoTracks()[0];
+                if (!isLikelyMacroOrDepthTrack(cTrack)) {
+                  chosenStream = candidateStream;
+                  break;
+                }
+                stopMediaStream(candidateStream);
+              }
+            }
+
+            if (!chosenStream) {
+              chosenStream = await openSensorStream({
+                deviceId: mainBackCam?.deviceId,
+                facingMode: 'environment',
+              });
+            }
+          } else {
+            chosenStream = primaryStream;
+          }
         }
       }
-    },
-    [],
-  );
 
-  // Tự động kích hoạt và đồng bộ luồng Camera trên Web mỗi khi mount, đổi cam trước/sau hoặc đổi 0.5x/1x
+      if (requestId !== webRequestIdRef.current) {
+        stopMediaStream(chosenStream);
+        return;
+      }
+
+      if (!chosenStream) {
+        setCameraError('Không mở được ống kính máy ảnh.');
+        return;
+      }
+
+      const finalTrack = chosenStream.getVideoTracks()[0];
+      const finalCaps = (finalTrack as any)?.getCapabilities?.() || {};
+      if (finalCaps.zoom && typeof (finalTrack as any).applyConstraints === 'function') {
+        await (finalTrack as any)
+          .applyConstraints({ advanced: [{ zoom: finalCaps.zoom.min ?? 1 }] })
+          .catch(() => null);
+      }
+
+      activeWebStreamRef.current = chosenStream;
+      if (webVideoRef.current) {
+        webVideoRef.current.srcObject = chosenStream;
+        await webVideoRef.current.play().catch(() => null);
+      }
+      setIsCameraReady(true);
+      setCameraError(null);
+    } catch {
+      if (requestId === webRequestIdRef.current) {
+        setCameraError('Ống kính đang bận, hãy bấm thử mở lại.');
+      }
+    }
+  }, []);
+
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     if (!shouldMountCamera) return;
-    void syncWebCameraStream(facing, lensMode);
-  }, [shouldMountCamera, facing, lensMode, syncWebCameraStream]);
+    void syncWebCameraStream(facing);
+  }, [shouldMountCamera, facing, syncWebCameraStream]);
 
-  // Đồng bộ đèn Flash (Torch) trên Web nếu phần cứng hỗ trợ
   useEffect(() => {
     if (Platform.OS !== 'web' || facing !== 'back') return;
     const track = activeWebStreamRef.current?.getVideoTracks()?.[0];
@@ -811,8 +692,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     void Haptics.selectionAsync().catch(() => {});
     setCameraError(null);
     setIsCameraReady(false);
-    // Khi lật camera luôn giữ mặc định góc 0.5x rộng như Locket
-    setLensMode('0.5x');
     setFacing((cur) => (cur === 'front' ? 'back' : 'front'));
   }, []);
 
@@ -824,11 +703,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   const handleNativeCameraReady = useCallback(() => {
     setIsCameraReady(true);
     setCameraError(null);
-  }, []);
-
-  const handleToggleZoomLens = useCallback(() => {
-    void Haptics.selectionAsync().catch(() => {});
-    setLensMode((cur) => (cur === '0.5x' ? '1x' : '0.5x'));
   }, []);
 
   const handleMountError = useCallback((e: { message?: string }) => {
@@ -847,22 +721,20 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         if (activeVideo && activeVideo.videoWidth > 0 && activeVideo.videoHeight > 0) {
           const vw = activeVideo.videoWidth;
           const vh = activeVideo.videoHeight;
-          const baseSide = Math.min(vw, vh);
-          const scaleFactor = webSoftwareScale > 1 ? 1 / webSoftwareScale : 1;
-          const side = Math.floor(baseSide * scaleFactor);
+          const side = Math.min(vw, vh);
           const sx = Math.floor((vw - side) / 2);
           const sy = Math.floor((vh - side) / 2);
 
           const canvas = document.createElement('canvas');
-          canvas.width = baseSide;
-          canvas.height = baseSide;
+          canvas.width = side;
+          canvas.height = side;
           const ctx = canvas.getContext('2d');
           if (ctx) {
             if (facing === 'front') {
-              ctx.translate(baseSide, 0);
+              ctx.translate(side, 0);
               ctx.scale(-1, 1);
             }
-            ctx.drawImage(activeVideo, sx, sy, side, side, 0, 0, baseSide, baseSide);
+            ctx.drawImage(activeVideo, sx, sy, side, side, 0, 0, side, side);
             const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
             if (dataUrl) {
               setPreviewUri(dataUrl);
@@ -887,7 +759,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     } finally {
       setIsCapturing(false);
     }
-  }, [isCapturing, isCameraReady, facing, webSoftwareScale]);
+  }, [isCapturing, isCameraReady, facing]);
 
   const handleRetake = useCallback(() => {
     void Haptics.selectionAsync().catch(() => {});
@@ -928,8 +800,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   const showCameraChrome = granted && !previewUri && !cameraError;
   const bounceStyle = { transform: [{ translateY: bounce }] };
 
-  const nativeZoomValue = lensMode === '0.5x' ? 0 : 0.04;
-
   const setWebVideoNode = useCallback((node: HTMLVideoElement | null) => {
     webVideoRef.current = node;
     if (node) {
@@ -943,12 +813,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
       }
     }
   }, []);
-
-  const webVideoTransform = useMemo(() => {
-    const mirrorPart = facing === 'front' ? 'scaleX(-1)' : '';
-    const scalePart = webSoftwareScale !== 1 ? `scale(${webSoftwareScale})` : '';
-    return `${mirrorPart} ${scalePart}`.trim() || 'none';
-  }, [facing, webSoftwareScale]);
 
   return (
     <View style={[styles.root, { backgroundColor: colors.surface, minHeight: stageMinHeight }]}>
@@ -1079,20 +943,19 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
                   width: '100%',
                   height: '100%',
                   objectFit: 'cover',
-                  transform: webVideoTransform,
-                  transition: 'transform 0.18s ease-out',
+                  transform: facing === 'front' ? 'scaleX(-1)' : 'none',
                 },
               })
             ) : (
               <CameraView
                 ref={cameraRef}
                 style={{
-                  width: lensMode === '0.5x' ? Math.round(viewportSize * 1.08) : viewportSize,
+                  width: Math.round(viewportSize * 1.08),
                   height: nativeSensorHeight,
                 }}
                 facing={facing}
                 flash={flash}
-                zoom={nativeZoomValue}
+                zoom={0}
                 ratio="4:3"
                 mirror={facing === 'front'}
                 mode="picture"
@@ -1111,60 +974,18 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 
         {granted && (
           <View style={styles.overlayTop} pointerEvents="box-none">
-            <View style={styles.topLeftGroup} pointerEvents="box-none">
-              {showCameraChrome ? (
-                <GlassButton onPress={handleFlashCycle} label={FLASH_LABEL[flash]}>
-                  <FlashIcon mode={flash} size={22} />
-                </GlassButton>
-              ) : (
-                <View style={{ width: 42, height: 42 }} />
-              )}
-
-              {showCameraChrome && (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Chuyển đổi góc chụp 0.5x và 1x"
-                  onPress={handleToggleZoomLens}
-                  style={({ pressed }) => [styles.modernLensPill, pressed && styles.pressed]}
-                >
-                  <View
-                    style={[
-                      styles.lensBadgeItem,
-                      lensMode === '0.5x' && styles.lensBadgeActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.lensTextItem,
-                        lensMode === '0.5x' && styles.lensTextActive,
-                      ]}
-                    >
-                      0.5x
-                    </Text>
-                  </View>
-                  <View
-                    style={[
-                      styles.lensBadgeItem,
-                      lensMode === '1x' && styles.lensBadgeActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.lensTextItem,
-                        lensMode === '1x' && styles.lensTextActive,
-                      ]}
-                    >
-                      1x
-                    </Text>
-                  </View>
-                </Pressable>
-              )}
-            </View>
+            {showCameraChrome ? (
+              <GlassButton onPress={handleFlashCycle} label={FLASH_LABEL[flash]}>
+                <FlashIcon mode={flash} size={22} />
+              </GlassButton>
+            ) : (
+              <View style={{ width: 42, height: 42 }} />
+            )}
 
             <View
               style={[
                 styles.stampBadge,
-                { backgroundColor: colors.primary, maxWidth: viewportSize - 16 * 2 - 120 },
+                { backgroundColor: colors.primary, maxWidth: viewportSize - 16 * 2 - 58 },
               ]}
               pointerEvents="none"
             >
@@ -1419,37 +1240,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-  },
-  topLeftGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  modernLensPill: {
-    height: 38,
-    paddingHorizontal: 5,
-    borderRadius: 19,
-    backgroundColor: GLASS,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-  },
-  lensBadgeItem: {
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 14,
-  },
-  lensBadgeActive: {
-    backgroundColor: 'rgba(255, 255, 255, 0.22)',
-  },
-  lensTextItem: {
-    color: 'rgba(255,255,255,0.65)',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  lensTextActive: {
-    color: '#FFFFFF',
-    fontWeight: '900',
   },
   stampBadge: {
     paddingHorizontal: 13,

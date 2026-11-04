@@ -167,11 +167,12 @@ interface SettingsState {
   recordMomoContribution: (contributorName: string, amount: number, goalTitle: string) => Promise<void>;
 }
 
+// Khóa lưu trữ tách riêng theo từng coupleId VÀ từng userId để không bao giờ trộn góc nhìn myProfile/partnerProfile
 const getSharedRoomStorageKey = (coupleId?: string | null, userId?: string | null) =>
-  `lovevault_room_shared_v6_${coupleId || (userId ? `single_${userId}` : 'guest')}`;
+  `lovevault_room_shared_v7_${coupleId || 'no_couple'}_${userId || 'guest'}`;
 
 const getUserPrivateStorageKey = (userId?: string | null) =>
-  `lovevault_user_private_v6_${userId || 'guest'}`;
+  `lovevault_user_private_v7_${userId || 'guest'}`;
 
 // Đếm số lần lưu đang chạy dở, lúc đó không kéo dữ liệu từ server để tránh đè lên thay đổi vừa nhập
 let pendingLocalWrites = 0;
@@ -192,10 +193,17 @@ const cleanAvatarUri = (uri?: string | null): string | null => {
   return trimmed;
 };
 
-// Dữ liệu kéo từ server có thể chứa đường dẫn file:// nội bộ của máy đối phương.
-// Giữ lại link http(s) và data:image/... (Base64) để cả 2 máy đều hiển thị được.
+// Làm sạch dữ liệu kéo từ server:
+// 1. Giữ lại link http(s) và data:image/... (Base64)
+// 2. XÓA BỎ myProfile và partnerProfile顶cấp từ server (vì góc nhìn trên server có thể là của máy đối phương!)
+//    Chỉ sử dụng bảng ánh xạ `membersById` / `profiles` theo đúng userId thực tế của từng người.
 function sanitizeRemoteRoomPayload(remote: any) {
+  if (!remote || typeof remote !== 'object') return {};
   const next = { ...remote };
+
+  // Tuyệt đối không dùng myProfile / partnerProfile tương đối từ payload chung của phòng
+  delete next.myProfile;
+  delete next.partnerProfile;
 
   if (!isSyncableMediaUri(next.heroWallpaperUri)) {
     delete next.heroWallpaperUri;
@@ -207,9 +215,9 @@ function sanitizeRemoteRoomPayload(remote: any) {
     for (const [uid, prof] of Object.entries(rawMap)) {
       if (prof && typeof prof === 'object') {
         const { avatarUri, ...rest } = prof as any;
-        cleanMembers[uid] = isSyncableMediaUri(avatarUri) ? { ...rest, avatarUri } : rest;
-      } else {
-        cleanMembers[uid] = prof;
+        cleanMembers[uid] = isSyncableMediaUri(avatarUri)
+          ? { ...rest, avatarUri, userId: uid }
+          : { ...rest, userId: uid };
       }
     }
     next.membersById = cleanMembers;
@@ -319,7 +327,7 @@ const DEFAULT_SOCIAL_PREFS: SocialMessengerPrefs = {
   heartTapHaptics: true,
 };
 
-// Hàm gộp 2 hồ sơ an toàn: không bao giờ để giá trị null/rỗng đè mất birthDate hay avatarUri đã có
+// Hàm gộp 2 hồ sơ của CÙNG MỘT NGƯỜI an toàn: ưu tiên incoming (mới nhất từ Server/Update), chỉ fallback khi incoming bị null/rỗng
 function mergeProfilePreservingData(
   base: PersonProfile,
   incoming?: Partial<PersonProfile> | null,
@@ -360,6 +368,27 @@ function mergeProfilePreservingData(
   };
 }
 
+// Chỉ ghép fallback nếu fallback đó thực sự thuộc về cùng một userId (hoặc chưa gắn userId)
+// Ngăn chặn triệt để lỗi lấy nhầm hồ sơ của Quốc Anh đắp sang cho Trúc Duyên khi đổi tài khoản!
+function safeFallbackForUser(
+  candidate: Partial<PersonProfile> | null | undefined,
+  expectedUserId: string | null | undefined,
+): Partial<PersonProfile> | undefined {
+  if (!candidate) return undefined;
+  if (
+    candidate.userId &&
+    expectedUserId &&
+    !candidate.userId.startsWith('partner_in_') &&
+    !candidate.userId.startsWith('local_') &&
+    !expectedUserId.startsWith('partner_in_') &&
+    !expectedUserId.startsWith('local_') &&
+    String(candidate.userId) !== String(expectedUserId)
+  ) {
+    return undefined;
+  }
+  return candidate;
+}
+
 function resolveProfilesForViewer(
   membersById: Record<string, PersonProfile>,
   currentUserId: string | null,
@@ -376,6 +405,7 @@ function resolveProfilesForViewer(
   }
 
   const myEntry = membersById[currentUserId];
+  const validFallbackMy = safeFallbackForUser(fallbackMy, currentUserId);
 
   // Tìm tất cả các entry không phải của mình (bao gồm cả key thật và key tạm partner_in_...)
   const partnerEntries = allEntries.filter(([uid]) => String(uid) !== String(currentUserId));
@@ -383,9 +413,16 @@ function resolveProfilesForViewer(
     ([uid]) => !uid.startsWith('partner_in_') && !uid.startsWith('local_'),
   );
   const primaryPartnerPair = realPartnerPair || partnerEntries[0];
+  const resolvedPartnerId = primaryPartnerPair
+    ? primaryPartnerPair[0]
+    : fallbackPartner?.userId && String(fallbackPartner.userId) !== String(currentUserId)
+      ? fallbackPartner.userId
+      : null;
 
-  // Gộp dữ liệu từ mọi entry của partner (để nếu birthDate/avatarUri nằm ở key tạm partner_in_... thì vẫn giữ được)
-  let aggregatedPartner: Partial<PersonProfile> = { ...(fallbackPartner || {}) };
+  const validFallbackPartner = safeFallbackForUser(fallbackPartner, resolvedPartnerId);
+
+  // Gộp dữ liệu từ các entry của partner (nhưng bỏ qua nếu có dữ liệu bị trùng với myEntry do lỗi cũ)
+  let aggregatedPartner: Partial<PersonProfile> = { ...(validFallbackPartner || {}) };
   for (const [, prof] of partnerEntries) {
     aggregatedPartner = mergeProfilePreservingData(
       DEFAULT_PARTNER_PROFILE,
@@ -395,7 +432,7 @@ function resolveProfilesForViewer(
   }
 
   const resolvedMy: PersonProfile = {
-    ...mergeProfilePreservingData(DEFAULT_MY_PROFILE, myEntry, fallbackMy),
+    ...mergeProfilePreservingData(DEFAULT_MY_PROFILE, myEntry, validFallbackMy),
     userId: currentUserId,
   };
 
@@ -405,9 +442,7 @@ function resolveProfilesForViewer(
       primaryPartnerPair ? primaryPartnerPair[1] : undefined,
       aggregatedPartner,
     ),
-    userId: primaryPartnerPair
-      ? primaryPartnerPair[0]
-      : fallbackPartner?.userId || null,
+    userId: resolvedPartnerId,
   };
 
   return { myProfile: resolvedMy, partnerProfile: resolvedPartner };
@@ -419,7 +454,10 @@ function normalizeCouponsForRoom(
   partnerUserId: string | null,
 ): LoveCouponItem[] {
   const list = Array.isArray(rawCoupons) && rawCoupons.length > 0 ? rawCoupons : DEFAULT_COUPONS;
-  const sortedUserIds = [myUserId, partnerUserId].filter(Boolean).map(String).sort();
+  const sortedUserIds = [myUserId, partnerUserId]
+    .filter((id): id is string => Boolean(id && !id.startsWith('partner_in_') && !id.startsWith('local_')))
+    .map(String)
+    .sort();
   const user1Id = sortedUserIds[0] || myUserId || null;
   const user2Id = sortedUserIds[1] || partnerUserId || null;
 
@@ -435,7 +473,7 @@ function normalizeCouponsForRoom(
     const slot: 'USER_1' | 'USER_2' =
       cp.ownerSlot || (index % 2 === 0 ? 'USER_1' : 'USER_2');
 
-    if (!ownerUserId) {
+    if (!ownerUserId || ownerUserId.startsWith('partner_in_') || ownerUserId.startsWith('local_')) {
       ownerUserId = slot === 'USER_1' ? user1Id : user2Id;
     }
 
@@ -454,10 +492,32 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   const persistSharedRoomState = async (syncServer = true) => {
     const s = get();
     const roomKey = getSharedRoomStorageKey(s.activeCoupleId, s.activeUserId);
-    const sharedPayload = {
+
+    // Đảm bảo membersById luôn chứa hồ sơ mới nhất của cả 2 người theo đúng userId trước khi lưu
+    const cleanMembersById: Record<string, PersonProfile> = { ...s.membersById };
+    if (s.activeUserId) {
+      cleanMembersById[s.activeUserId] = {
+        ...s.myProfile,
+        userId: s.activeUserId,
+      };
+    }
+    const partnerUid =
+      s.partnerProfile.userId && String(s.partnerProfile.userId) !== String(s.activeUserId)
+        ? s.partnerProfile.userId
+        : Object.keys(cleanMembersById).find((k) => String(k) !== String(s.activeUserId));
+    if (partnerUid) {
+      cleanMembersById[partnerUid] = {
+        ...s.partnerProfile,
+        userId: partnerUid,
+      };
+    }
+
+    // Dữ liệu lưu ở máy cục bộ (đã tách theo roomKey riêng của từng userId)
+    const localPayload = {
       coupleId: s.activeCoupleId,
-      membersById: s.membersById,
-      // Lưu trực tiếp cả myProfile và partnerProfile vào Storage để khi mở lại app luôn có đủ birthDate & avatarUri
+      viewerUserId: s.activeUserId,
+      membersById: cleanMembersById,
+      profiles: cleanMembersById,
       myProfile: s.myProfile,
       partnerProfile: s.partnerProfile,
       themePreset: s.themePreset,
@@ -474,16 +534,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       momoFund: s.momoFund,
       updatedAt: new Date().toISOString(),
     };
-    await storage.setItem(roomKey, JSON.stringify(sharedPayload));
+    await storage.setItem(roomKey, JSON.stringify(localPayload));
 
+    // Khi đẩy lên Server: CHỈ đẩy `membersById` / `profiles` (theo ID từng người),
+    // KHÔNG đẩy `myProfile` và `partnerProfile` để tránh máy người kia kéo về bị ngược vai!
     if (syncServer && s.activeCoupleId) {
+      const { myProfile: _omitMy, partnerProfile: _omitPartner, ...serverSafePayload } = localPayload;
       api
         .patch('/api/v1/couples/shared-settings', {
           coupleId: s.activeCoupleId,
-          ...sharedPayload,
+          ...serverSafePayload,
           sharedSettings: {
-            ...sharedPayload,
-            profiles: s.membersById,
+            ...serverSafePayload,
+            membersById: cleanMembersById,
+            profiles: cleanMembersById,
           },
         })
         .catch(() => null);
@@ -582,67 +646,90 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         }
 
         const roomKey = getSharedRoomStorageKey(targetCoupleId, targetUserId);
+        const legacyV6RoomKey = `lovevault_room_shared_v6_${targetCoupleId || (targetUserId ? `single_${targetUserId}` : 'guest')}`;
         const userKey = getUserPrivateStorageKey(targetUserId);
 
-        const [rawRoom, rawPrivate, legacyV4Raw] = await Promise.all([
+        const [rawRoom, rawLegacyV6Room, rawPrivate] = await Promise.all([
           storage.getItem(roomKey),
+          storage.getItem(legacyV6RoomKey),
           storage.getItem(userKey),
-          storage.getItem('lovevault_settings_v4'),
         ]);
 
         const parsedRoom = rawRoom
           ? JSON.parse(rawRoom)
-          : legacyV4Raw
-            ? JSON.parse(legacyV4Raw)
+          : rawLegacyV6Room
+            ? JSON.parse(rawLegacyV6Room)
             : {};
-        if (!rawRoom && legacyV4Raw) {
-          storage.removeItem('lovevault_settings_v4').catch(() => null);
-        }
+
         const parsedPrivate = rawPrivate ? JSON.parse(rawPrivate) : {};
 
         const nextMembersById: Record<string, PersonProfile> = {};
-        for (const [uid, prof] of Object.entries(parsedRoom.membersById || {})) {
+        const rawMembers = parsedRoom.membersById || parsedRoom.profiles || {};
+        for (const [uid, prof] of Object.entries(rawMembers)) {
           if (prof && typeof prof === 'object') {
             nextMembersById[uid] = {
               ...(prof as PersonProfile),
+              userId: uid,
               avatarUri: cleanAvatarUri((prof as PersonProfile).avatarUri),
             };
           }
         }
 
-        if (targetUserId && parsedRoom.myProfile) {
+        // Chỉ khôi phục myProfile / partnerProfile từ cache nếu nó khớp đúng với viewerUserId hiện tại
+        const isSameViewer =
+          !parsedRoom.viewerUserId ||
+          String(parsedRoom.viewerUserId) === String(targetUserId);
+
+        const cachedMy =
+          isSameViewer &&
+          parsedRoom.myProfile &&
+          (!parsedRoom.myProfile.userId ||
+            String(parsedRoom.myProfile.userId) === String(targetUserId))
+            ? parsedRoom.myProfile
+            : undefined;
+
+        const cachedPartner =
+          isSameViewer &&
+          parsedRoom.partnerProfile &&
+          (!parsedRoom.partnerProfile.userId ||
+            String(parsedRoom.partnerProfile.userId) !== String(targetUserId))
+            ? parsedRoom.partnerProfile
+            : undefined;
+
+        if (targetUserId && cachedMy) {
           nextMembersById[targetUserId] = {
             ...mergeProfilePreservingData(
               DEFAULT_MY_PROFILE,
               nextMembersById[targetUserId],
-              parsedRoom.myProfile,
+              cachedMy,
             ),
             userId: targetUserId,
           };
         }
 
-        // Khôi phục đầy đủ cả partnerProfile đã lưu trong parsedRoom (bao gồm birthDate và avatarUri)
-        if (parsedRoom.partnerProfile) {
+        if (cachedPartner) {
           const existingPartnerKey =
-            parsedRoom.partnerProfile.userId ||
+            cachedPartner.userId ||
             Object.keys(nextMembersById).find((k) => String(k) !== String(targetUserId)) ||
             `partner_in_${targetCoupleId || 'room'}`;
 
-          nextMembersById[existingPartnerKey] = {
-            ...mergeProfilePreservingData(
-              DEFAULT_PARTNER_PROFILE,
-              nextMembersById[existingPartnerKey],
-              parsedRoom.partnerProfile,
-            ),
-            userId: existingPartnerKey,
-          };
+          if (String(existingPartnerKey) !== String(targetUserId)) {
+            nextMembersById[existingPartnerKey] = {
+              ...mergeProfilePreservingData(
+                DEFAULT_PARTNER_PROFILE,
+                nextMembersById[existingPartnerKey],
+                cachedPartner,
+              ),
+              userId: existingPartnerKey,
+            };
+          }
         }
 
         const { myProfile, partnerProfile } = resolveProfilesForViewer(
           nextMembersById,
           targetUserId || null,
-          parsedRoom.myProfile,
-          parsedRoom.partnerProfile,
+          cachedMy,
+          cachedPartner,
         );
 
         const normalizedCoupons = normalizeCouponsForRoom(
@@ -713,6 +800,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       const targetCoupleId: string | null =
         coupleId !== undefined ? coupleId : currentState.activeCoupleId;
 
+      const isSwitchingUser =
+        Boolean(currentState.activeUserId) && String(currentState.activeUserId) !== String(userId);
+
       if (
         currentState.activeUserId !== userId ||
         currentState.activeCoupleId !== targetCoupleId
@@ -721,16 +811,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       }
 
       set((state) => {
-        const mergedMembers: Record<string, PersonProfile> = { ...state.membersById };
+        // Nếu vừa đổi tài khoản trên cùng 1 máy, chỉ giữ các member có ID thật, loại bỏ key tạm cũ
+        const mergedMembers: Record<string, PersonProfile> = {};
+        for (const [k, v] of Object.entries(state.membersById)) {
+          if (!isSwitchingUser || (!k.startsWith('partner_in_') && !k.startsWith('local_'))) {
+            mergedMembers[k] = v;
+          }
+        }
+
         const remoteMembers =
           sharedRoomPayload?.membersById || sharedRoomPayload?.profiles || {};
 
-        // 1. Gộp dữ liệu từ Server vào Local nhưng BẢO TỒN birthDate và avatarUri của CẢ 2 NGƯỜI nếu server trả về null
+        // 1. Gộp dữ liệu từ Server vào Local theo đúng từng `uid` độc lập
         for (const [uid, remoteProf] of Object.entries(remoteMembers)) {
           if (remoteProf && typeof remoteProf === 'object') {
             const prevProf = mergedMembers[uid];
             const isMe = String(uid) === String(userId);
-            const fallbackStateProf = isMe ? state.myProfile : state.partnerProfile;
+            const candidateFallback = isMe ? state.myProfile : state.partnerProfile;
+            const validFallback = safeFallbackForUser(candidateFallback, uid);
 
             mergedMembers[uid] = {
               ...mergeProfilePreservingData(
@@ -739,7 +837,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
                 mergeProfilePreservingData(
                   isMe ? DEFAULT_MY_PROFILE : DEFAULT_PARTNER_PROFILE,
                   prevProf,
-                  fallbackStateProf,
+                  validFallback,
                 ),
               ),
               userId: uid,
@@ -747,8 +845,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           }
         }
 
-        // 2. Gom toàn bộ dữ liệu Partner đang nằm ở các key tạm (partner_in_..., local_...) TRƯỚC KHI xóa key tạm!
-        let stashedPartnerData: Partial<PersonProfile> = { ...state.partnerProfile };
+        // 2. Định vị chính xác ID của Partner (không bao giờ trùng với userId của mình)
+        const realPartnerKey = Object.keys(mergedMembers).find(
+          (k) =>
+            String(k) !== String(userId) &&
+            !k.startsWith('partner_in_') &&
+            !k.startsWith('local_'),
+        );
+        const finalPartnerKey =
+          (partnerId && String(partnerId) !== String(userId) ? partnerId : null) ||
+          realPartnerKey ||
+          `partner_in_${targetCoupleId || 'room'}`;
+
+        // 3. Gom dữ liệu Partner từ các key tạm (chỉ lấy các entry khác userId của mình)
+        let stashedPartnerData: Partial<PersonProfile> = {
+          ...(safeFallbackForUser(state.partnerProfile, finalPartnerKey) || {}),
+        };
         Object.entries(mergedMembers).forEach(([k, prof]) => {
           if (String(k) !== String(userId)) {
             stashedPartnerData = mergeProfilePreservingData(
@@ -759,17 +871,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           }
         });
 
-        // 3. Định vị chính xác ID của Partner
-        const realPartnerKey = Object.keys(mergedMembers).find(
-          (k) =>
-            String(k) !== String(userId) &&
-            !k.startsWith('partner_in_') &&
-            !k.startsWith('local_'),
-        );
-        const finalPartnerKey =
-          partnerId || realPartnerKey || `partner_in_${targetCoupleId || 'room'}`;
-
-        // 4. Dọn dẹp các key tạm không khớp với finalPartnerKey (dữ liệu đã được cất vào stashedPartnerData ở Bước 2)
+        // 4. Dọn dẹp các key tạm không khớp với finalPartnerKey
         Object.keys(mergedMembers).forEach((k) => {
           if (
             String(k) !== String(userId) &&
@@ -780,11 +882,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           }
         });
 
-        // 5. Chuẩn hóa hồ sơ bản thân (bảo toàn birthDate & avatarUri)
+        // 5. Chuẩn hóa hồ sơ bản thân (chỉ dùng fallback nếu đúng là của userId này)
+        const validMyStateFallback = safeFallbackForUser(state.myProfile, userId);
         const existingMe = mergeProfilePreservingData(
           DEFAULT_MY_PROFILE,
           mergedMembers[userId],
-          state.myProfile,
+          validMyStateFallback,
         );
         const isGenericMyName =
           !existingMe.nickname ||
@@ -798,13 +901,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
             isGenericMyName && myFullName ? myFullName.trim() : existingMe.nickname || 'Bạn',
           avatarUri:
             cleanAvatarUri(existingMe.avatarUri) ||
-            cleanAvatarUri(state.myProfile.avatarUri) ||
+            cleanAvatarUri(validMyStateFallback?.avatarUri) ||
             cleanAvatarUri(myAvatarUrl) ||
             null,
-          birthDate: existingMe.birthDate || state.myProfile.birthDate || null,
+          birthDate: existingMe.birthDate || validMyStateFallback?.birthDate || null,
         };
 
-        // 6. Chuẩn hóa hồ sơ Partner (bảo toàn 100% birthDate & avatarUri từ stashedPartnerData)
+        // 6. Chuẩn hóa hồ sơ Partner (chỉ dùng dữ liệu của Partner, tuyệt đối không lấy nhầm của userId)
         const existingPartner = mergeProfilePreservingData(
           DEFAULT_PARTNER_PROFILE,
           mergedMembers[finalPartnerKey],
@@ -815,11 +918,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           existingPartner.nickname === 'Bạn Đời' ||
           existingPartner.nickname === 'Người ấy';
 
+        // Phát hiện nếu do lỗi phiên bản cũ mà hồ sơ Partner bị sao chép y hệt ngày sinh & tên của chính mình
+        const isCorruptedCloneOfMe =
+          Boolean(partnerName) &&
+          existingPartner.nickname === mergedMembers[userId].nickname &&
+          partnerName.trim() !== mergedMembers[userId].nickname;
+
         mergedMembers[finalPartnerKey] = {
           ...existingPartner,
           userId: finalPartnerKey,
           nickname:
-            isGenericPartnerName && partnerName
+            (isGenericPartnerName || isCorruptedCloneOfMe) && partnerName
               ? partnerName.trim()
               : existingPartner.nickname || 'Người ấy',
           avatarUri:
@@ -830,7 +939,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           birthDate:
             existingPartner.birthDate ||
             stashedPartnerData.birthDate ||
-            state.partnerProfile.birthDate ||
             null,
         };
 
@@ -873,7 +981,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
     pullSharedRoomSettingsFromServer: async () => {
       const { activeCoupleId, activeUserId } = get();
-      if (!activeCoupleId || pendingLocalWrites > 0) return;
+      if (!activeCoupleId || !activeUserId || pendingLocalWrites > 0) return;
       try {
         const res = await api.get('/api/v1/couples/shared-settings', {
           params: { coupleId: activeCoupleId },
@@ -881,7 +989,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         const remote = res.data?.sharedSettings || res.data?.settings || res.data;
         if (remote && typeof remote === 'object') {
           await get().syncIdentityFromAuth({
-            userId: activeUserId || '',
+            userId: activeUserId,
             coupleId: activeCoupleId,
             sharedRoomPayload: sanitizeRemoteRoomPayload(remote),
           });
@@ -980,18 +1088,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           );
           const existingPartnerUid =
             (state.partnerProfile.userId &&
+            String(state.partnerProfile.userId) !== String(myUid) &&
             !state.partnerProfile.userId.startsWith('partner_in_')
               ? state.partnerProfile.userId
               : null) ||
             partnerKeyFromMembers ||
-            state.partnerProfile.userId ||
+            (state.partnerProfile.userId && String(state.partnerProfile.userId) !== String(myUid)
+              ? state.partnerProfile.userId
+              : null) ||
             Object.keys(state.membersById).find((k) => String(k) !== String(myUid)) ||
             `partner_in_${state.activeCoupleId || 'room'}`;
 
           resolvedPartnerUid = existingPartnerUid;
 
+          const baseMy = state.membersById[myUid] || state.myProfile;
+          const basePartner = state.membersById[existingPartnerUid] || state.partnerProfile;
+
           const updatedMy: PersonProfile = myPatch
             ? {
+                ...baseMy,
                 ...state.myProfile,
                 ...myPatch,
                 avatarUri:
@@ -1001,6 +1116,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
                 userId: myUid,
               }
             : {
+                ...baseMy,
                 ...state.myProfile,
                 avatarUri: cleanAvatarUri(state.myProfile.avatarUri),
                 userId: myUid,
@@ -1008,6 +1124,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
           const updatedPartner: PersonProfile = partnerPatch
             ? {
+                ...basePartner,
                 ...state.partnerProfile,
                 ...partnerPatch,
                 avatarUri:
@@ -1017,6 +1134,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
                 userId: existingPartnerUid,
               }
             : {
+                ...basePartner,
                 ...state.partnerProfile,
                 avatarUri: cleanAvatarUri(state.partnerProfile.avatarUri),
                 userId: existingPartnerUid,
@@ -1057,12 +1175,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
             if (cloudUrl && get().myProfile.avatarUri === pickedMyAvatar) {
               set((state) => {
                 const myUid = state.activeUserId || 'local_me';
-                const nextMy: PersonProfile = { ...state.myProfile, avatarUri: cloudUrl };
+                const nextMy: PersonProfile = { ...state.myProfile, avatarUri: cloudUrl, userId: myUid };
                 return {
                   myProfile: nextMy,
                   membersById: {
                     ...state.membersById,
-                    [myUid]: { ...(state.membersById[myUid] || nextMy), avatarUri: cloudUrl },
+                    [myUid]: { ...(state.membersById[myUid] || nextMy), avatarUri: cloudUrl, userId: myUid },
                   },
                 };
               });
@@ -1072,7 +1190,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           }
         }
 
-        // Upload ảnh đại diện của NGƯỜI THƯƠNG lên Cloud (Fix lỗi mất ảnh & trắng ảnh của user còn lại)
+        // Upload ảnh đại diện của NGƯỜI THƯƠNG lên Cloud
         const pickedPartnerAvatar = cleanAvatarUri(partnerPatch?.avatarUri);
         if (pickedPartnerAvatar && !isCloudHttpUrl(pickedPartnerAvatar)) {
           try {
@@ -1086,6 +1204,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
                 const nextPartner: PersonProfile = {
                   ...state.partnerProfile,
                   avatarUri: cloudPartnerUrl,
+                  userId: pUid,
                 };
                 return {
                   partnerProfile: nextPartner,
@@ -1094,6 +1213,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
                     [pUid]: {
                       ...(state.membersById[pUid] || nextPartner),
                       avatarUri: cloudPartnerUrl,
+                      userId: pUid,
                     },
                   },
                 };

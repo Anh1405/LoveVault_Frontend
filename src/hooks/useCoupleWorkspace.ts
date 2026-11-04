@@ -1120,6 +1120,10 @@ const QUESTION_BANK: Array<{
   },
 ];
 
+const COUPLE_ROOM_POLL_MS = 4000;
+
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
 const buildWorkspaceKeys = (coupleId?: string | null, userId?: string | null) => {
   const roomScope = coupleId || (userId ? `single_${userId}` : 'guest');
   return {
@@ -1185,7 +1189,7 @@ export function useCoupleWorkspace() {
     category: QUESTION_BANK[0].category,
     questionText: QUESTION_BANK[0].text,
     myAnswer: '',
-    partnerAnswer: QUESTION_BANK[0].mockPartnerReply,
+    partnerAnswer: null,
     answeredAt: null,
     answersByUserId: {},
   });
@@ -1199,6 +1203,9 @@ export function useCoupleWorkspace() {
   /**
    * Đẩy toàn bộ trạng thái hiện tại của phòng lên PostgreSQL để đảm bảo an toàn tuyệt đối
    */
+  const cloudPullBusyRef = useRef(false);
+  const cloudPushInFlightRef = useRef(0);
+
   const syncRoomSnapshotToCloud = useCallback(
     async (overrides?: {
       events?: ImportantEvent[];
@@ -1207,13 +1214,18 @@ export function useCoupleWorkspace() {
       qaHistory?: DailyQAItem[];
     }) => {
       if (!coupleId) return;
-      await pushCoupleRoomSnapshotToCloud({
-        coupleId,
-        events: overrides?.events ?? eventsRef.current,
-        goals: overrides?.goals ?? goalsRef.current,
-        dailyQA: overrides?.dailyQA ?? rawDailyQARef.current,
-        qaHistory: overrides?.qaHistory ?? qaHistoryRef.current,
-      });
+      cloudPushInFlightRef.current += 1;
+      try {
+        await pushCoupleRoomSnapshotToCloud({
+          coupleId,
+          events: overrides?.events ?? eventsRef.current,
+          goals: overrides?.goals ?? goalsRef.current,
+          dailyQA: overrides?.dailyQA ?? rawDailyQARef.current,
+          qaHistory: overrides?.qaHistory ?? qaHistoryRef.current,
+        });
+      } finally {
+        cloudPushInFlightRef.current -= 1;
+      }
     },
     [coupleId],
   );
@@ -1225,16 +1237,15 @@ export function useCoupleWorkspace() {
       const partnerEntry = Object.values(map).find((entry) => entry.userId !== currentUserId);
 
       if (Object.keys(map).length > 0) {
-        const fallbackMock =
-          QUESTION_BANK.find((q) => q.id === item.questionId)?.mockPartnerReply || null;
         return {
           ...item,
           myAnswer: myEntry?.answer || '',
-          partnerAnswer: partnerEntry?.answer || fallbackMock,
+          partnerAnswer: partnerEntry?.answer || null,
           answeredAt: myEntry?.answeredAt || null,
         };
       }
-      return item;
+      // Dữ liệu cũ chưa có answersByUserId: giữ câu trả lời của mình, bỏ câu mẫu của người kia
+      return { ...item, partnerAnswer: null };
     },
     [currentUserId],
   );
@@ -1464,8 +1475,10 @@ export function useCoupleWorkspace() {
           })),
           ...unsyncedLocalEvents,
         ];
-        setEvents(mergedEvents);
-        await storage.setItem(workspaceKeys.EVENTS, JSON.stringify(mergedEvents));
+        if (!sameJson(mergedEvents, eventsRef.current)) {
+          setEvents(mergedEvents);
+          await storage.setItem(workspaceKeys.EVENTS, JSON.stringify(mergedEvents));
+        }
       } else if (localEvents.length > 0) {
         // Nếu trên Cloud chưa có mà máy hiện tại đang có thì đẩy lên Cloud luôn
         void pushCoupleRoomSnapshotToCloud({
@@ -1490,8 +1503,10 @@ export function useCoupleWorkspace() {
           })),
           ...unsyncedLocalGoals,
         ];
-        setGoals(mergedGoals);
-        await storage.setItem(workspaceKeys.GOALS, JSON.stringify(mergedGoals));
+        if (!sameJson(mergedGoals, goalsRef.current)) {
+          setGoals(mergedGoals);
+          await storage.setItem(workspaceKeys.GOALS, JSON.stringify(mergedGoals));
+        }
       }
 
       // 3. Hợp nhất Daily QA hiện tại
@@ -1504,8 +1519,10 @@ export function useCoupleWorkspace() {
           ...cloudSnapshot.dailyQA,
           answersByUserId: mergedAnswersMap,
         };
-        setRawDailyQA(mergedDailyQA);
-        await storage.setItem(workspaceKeys.DAILY_QA, JSON.stringify(mergedDailyQA));
+        if (!sameJson(mergedDailyQA, rawDailyQARef.current)) {
+          setRawDailyQA(mergedDailyQA);
+          await storage.setItem(workspaceKeys.DAILY_QA, JSON.stringify(mergedDailyQA));
+        }
       }
 
       // 4. Hợp nhất Lịch sử Hỏi Đáp (QA History)
@@ -1526,8 +1543,10 @@ export function useCoupleWorkspace() {
           });
         }
         const mergedHistory = Array.from(byQuestionId.values());
-        setQaHistory(mergedHistory);
-        await storage.setItem(workspaceKeys.QA_HISTORY, JSON.stringify(mergedHistory));
+        if (!sameJson(mergedHistory, qaHistoryRef.current)) {
+          setQaHistory(mergedHistory);
+          await storage.setItem(workspaceKeys.QA_HISTORY, JSON.stringify(mergedHistory));
+        }
       }
     },
     [coupleId, workspaceKeys],
@@ -1772,6 +1791,57 @@ export function useCoupleWorkspace() {
 
     return () => sub.remove();
   }, [isLoaded, runDailyAutoAiRefresh]);
+
+  // Gần như thời gian thực: kéo dữ liệu mới của người kia mỗi vài giây khi app đang mở.
+  // Khi có WebSocket/SSE ở server, thay setInterval bằng lắng nghe sự kiện và gọi pullNow.
+  useEffect(() => {
+    if (!isLoaded || !coupleId) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const pullNow = async () => {
+      if (stopped || cloudPullBusyRef.current || cloudPushInFlightRef.current > 0) return;
+      cloudPullBusyRef.current = true;
+      try {
+        await pullAndMergeCloudWorkspace(
+          eventsRef.current,
+          goalsRef.current,
+          rawDailyQARef.current,
+          qaHistoryRef.current,
+        );
+      } catch {
+        // Lượt poll kế tiếp sẽ thử lại
+      } finally {
+        cloudPullBusyRef.current = false;
+      }
+    };
+
+    const startTimer = () => {
+      if (!timer) timer = setInterval(() => void pullNow(), COUPLE_ROOM_POLL_MS);
+    };
+    const stopTimer = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    if (AppState.currentState === 'active') startTimer();
+    const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'active') {
+        void pullNow();
+        startTimer();
+      } else {
+        stopTimer();
+      }
+    });
+
+    return () => {
+      stopped = true;
+      stopTimer();
+      sub.remove();
+    };
+  }, [isLoaded, coupleId, pullAndMergeCloudWorkspace]);
 
   const captureCoupleLocket = useCallback(
     async (source: 'CAMERA' | 'GALLERY', stampBadge: string, captionText: string) => {
@@ -2118,7 +2188,7 @@ export function useCoupleWorkspace() {
         category: picked.category,
         questionText: picked.text,
         myAnswer: '',
-        partnerAnswer: picked.mockPartnerReply,
+        partnerAnswer: null,
         answeredAt: null,
         answersByUserId: {},
       };

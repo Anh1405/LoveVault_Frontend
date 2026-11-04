@@ -477,6 +477,26 @@ export const HomeScreen = () => {
   const [tempAnnivDate, setTempAnnivDate] = useState<Date>(new Date());
 
   const [qaInput, setQaInput] = useState('');
+  const [qaSubmitting, setQaSubmitting] = useState(false);
+  const [qaError, setQaError] = useState<string | null>(null);
+  const hasMyAnswer = Boolean(dailyQA.myAnswer?.trim());
+  const hasPartnerAnswer = Boolean(dailyQA.partnerAnswer?.trim());
+  const bothAnswered = hasMyAnswer && hasPartnerAnswer;
+
+  const handleSubmitDailyAnswer = async () => {
+    const text = qaInput.trim();
+    if (!text || qaSubmitting) return;
+    setQaSubmitting(true);
+    setQaError(null);
+    try {
+      await submitDailyAnswer(text);
+      setQaInput('');
+    } catch {
+      setQaError('Chưa gửi được câu trả lời. Kiểm tra mạng rồi thử lại nhé.');
+    } finally {
+      setQaSubmitting(false);
+    }
+  };
   const [selectedMedia, setSelectedMedia] = useState<CoupleMediaItem | null>(null);
   const [pinUnlockInput, setPinUnlockInput] = useState('');
 
@@ -2201,7 +2221,7 @@ export const HomeScreen = () => {
                     {dailyQA.questionText}
                   </Text>
 
-                  {dailyQA.answeredAt ? (
+                  {bothAnswered ? (
                     <View style={{ marginTop: 14 }}>
                       <View style={[styles.qaBubble, { backgroundColor: colors.surfaceVariant }]}>
                         <Text
@@ -2238,26 +2258,70 @@ export const HomeScreen = () => {
                         </Text>
                       </View>
                     </View>
+                  ) : hasMyAnswer ? (
+                    <View style={{ marginTop: 14 }}>
+                      <View style={[styles.qaBubble, { backgroundColor: colors.surfaceVariant }]}>
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>
+                          Bạn đã gửi câu trả lời
+                        </Text>
+                        <Text
+                          style={{
+                            fontSize: 13,
+                            color: colors.textSecondary,
+                            marginTop: 4,
+                            lineHeight: 19,
+                          }}
+                        >
+                          Đang chờ {partnerProfile.nickname} trả lời. Khi cả hai đã trả lời, câu trả
+                          lời của hai người sẽ hiện ra cùng lúc.
+                        </Text>
+                      </View>
+                    </View>
                   ) : (
                     <View style={{ marginTop: 14 }}>
+                      {hasPartnerAnswer && (
+                        <Text
+                          style={{
+                            fontSize: 13,
+                            color: colors.textSecondary,
+                            marginBottom: 8,
+                            lineHeight: 19,
+                          }}
+                        >
+                          {partnerProfile.nickname} đã trả lời rồi. Viết câu trả lời của bạn để xem.
+                        </Text>
+                      )}
                       <TextInput
                         style={[
                           styles.qaInput,
                           { borderColor: colors.outline, color: colors.textPrimary },
                         ]}
-                        placeholder="Viết câu trả lời của bạn để xem phản hồi..."
+                        placeholder="Viết câu trả lời của bạn..."
                         placeholderTextColor={colors.textSecondary}
                         value={qaInput}
                         onChangeText={setQaInput}
+                        editable={!qaSubmitting}
                       />
+                      {qaError ? (
+                        <Text style={{ fontSize: 12, color: colors.error, marginTop: 8 }}>
+                          {qaError}
+                        </Text>
+                      ) : null}
                       <Pressable
-                        style={[styles.addBtn, { backgroundColor: colors.primary, marginTop: 10 }]}
-                        onPress={() => {
-                          void submitDailyAnswer(qaInput);
-                          setQaInput('');
-                        }}
+                        style={[
+                          styles.addBtn,
+                          {
+                            backgroundColor: colors.primary,
+                            marginTop: 10,
+                            opacity: qaSubmitting || !qaInput.trim() ? 0.5 : 1,
+                          },
+                        ]}
+                        disabled={qaSubmitting || !qaInput.trim()}
+                        onPress={() => void handleSubmitDailyAnswer()}
                       >
-                        <Text style={styles.addBtnText}>Gửi câu trả lời</Text>
+                        <Text style={styles.addBtnText}>
+                          {qaSubmitting ? 'Đang gửi...' : 'Gửi câu trả lời'}
+                        </Text>
                       </Pressable>
                     </View>
                   )}
@@ -2284,12 +2348,20 @@ export const HomeScreen = () => {
                         <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>
                           {hist.questionText}
                         </Text>
-                        <Text style={{ fontSize: 12, color: colors.textPrimary, marginTop: 6 }}>
-                          {myProfile.nickname}: {hist.myAnswer || '(Chưa trả lời)'}
-                        </Text>
-                        <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>
-                          {partnerProfile.nickname}: {hist.partnerAnswer}
-                        </Text>
+                        {hist.myAnswer?.trim() && hist.partnerAnswer?.trim() ? (
+                          <>
+                            <Text style={{ fontSize: 12, color: colors.textPrimary, marginTop: 6 }}>
+                              {myProfile.nickname}: {hist.myAnswer}
+                            </Text>
+                            <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>
+                              {partnerProfile.nickname}: {hist.partnerAnswer}
+                            </Text>
+                          </>
+                        ) : (
+                          <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 6 }}>
+                            Đang chờ cả hai cùng trả lời để hiện câu trả lời.
+                          </Text>
+                        )}
                       </View>
                     ))}
                   </View>
