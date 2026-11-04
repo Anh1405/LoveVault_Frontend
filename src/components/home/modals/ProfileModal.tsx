@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Image,
 } from 'react-native';
 import { DateTimeField } from './DateTimeField';
 import * as ImagePicker from 'expo-image-picker';
@@ -26,24 +27,148 @@ import {
 } from './modalConstantsAndUtils';
 import { styles } from './modalSharedStyles';
 
-// Hàm hỗ trợ lưu ảnh từ thư mục Cache sang thư mục lưu trữ vĩnh viễn (Document Directory)
-const saveAvatarPermanently = async (uri: string | null): Promise<string | null> => {
-  if (!uri) return null;
-  // Nếu là Web hoặc đường dẫn đã nằm trong documentDirectory / remote URL thì giữ nguyên
-  if (Platform.OS === 'web' || uri.includes(FileSystem.documentDirectory || '')) {
-    return uri;
+const PARTNER_BACKUP_KEY_PREFIX = 'lovevault_couple_profile_backup_';
+
+// Kiểm tra xem URI ảnh có hợp lệ hay là link blob cũ đã bị trình duyệt hủy
+const sanitizeAvatarUri = (uri: string | null | undefined): string | null => {
+  if (!uri || typeof uri !== 'string') return null;
+  const trimmed = uri.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return null;
+  // Trên Web, link blob: từ phiên trước chắc chắn sẽ bị trắng xóa sau khi thoát ra vào lại
+  if (Platform.OS === 'web' && trimmed.startsWith('blob:')) {
+    return null;
   }
+  return trimmed;
+};
+
+// Nén ảnh trên Web sang chuỗi Data URL (Base64) nhỏ gọn để không bao giờ bị mất khi F5/thoát app
+const compressWebImageToDataUrl = (srcUri: string, maxSize = 240): Promise<string | null> => {
+  if (Platform.OS !== 'web' || typeof document === 'undefined') return Promise.resolve(srcUri);
+  return new Promise((resolve) => {
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        const side = Math.min(img.width, img.height);
+        const sx = Math.floor((img.width - side) / 2);
+        const sy = Math.floor((img.height - side) / 2);
+        canvas.width = maxSize;
+        canvas.height = maxSize;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(srcUri);
+          return;
+        }
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, maxSize, maxSize);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+        resolve(dataUrl || srcUri);
+      } catch {
+        resolve(srcUri);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = srcUri;
+  });
+};
+
+// Chuyển đổi ảnh sang định dạng lưu trữ bền vững trên cả Web và Mobile
+const saveAvatarPermanently = async (
+  uri: string | null,
+  base64Data?: string | null,
+): Promise<string | null> => {
+  if (base64Data) {
+    const dataUri = base64Data.startsWith('data:image')
+      ? base64Data
+      : `data:image/jpeg;base64,${base64Data}`;
+    if (Platform.OS === 'web') {
+      return (await compressWebImageToDataUrl(dataUri, 240)) || dataUri;
+    }
+    return dataUri;
+  }
+
+  const cleanUri = sanitizeAvatarUri(uri);
+  if (!cleanUri) return null;
+
+  if (cleanUri.startsWith('data:image') || cleanUri.startsWith('http://') || cleanUri.startsWith('https://')) {
+    return cleanUri;
+  }
+
+  if (Platform.OS === 'web') {
+    return await compressWebImageToDataUrl(cleanUri, 240);
+  }
+
+  try {
+    // Đọc sang Base64 trên thiết bị thật để đồng bộ được sang máy người yêu mà không bị trắng ảnh
+    const base64FromFile = await FileSystem.readAsStringAsync(cleanUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    if (base64FromFile) {
+      return `data:image/jpeg;base64,${base64FromFile}`;
+    }
+  } catch {
+    // Fallback copy sang thư mục Document nếu không đọc được base64
+  }
+
+  if (FileSystem.documentDirectory && cleanUri.includes(FileSystem.documentDirectory)) {
+    return cleanUri;
+  }
+
   try {
     const filename = `avatar_${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`;
     const permanentPath = `${FileSystem.documentDirectory}${filename}`;
     await FileSystem.copyAsync({
-      from: uri,
+      from: cleanUri,
       to: permanentPath,
     });
     return permanentPath;
   } catch (error) {
     console.error('Lỗi khi lưu avatar vĩnh viễn:', error);
-    return uri;
+    return cleanUri;
+  }
+};
+
+interface ProfileBackupPayload {
+  myBirthDate: string | null;
+  myAvatarUri: string | null;
+  partnerNickname?: string;
+  partnerBirthDate: string | null;
+  partnerAvatarUri: string | null;
+}
+
+const readProfileBackup = async (backupKey: string): Promise<ProfileBackupPayload | null> => {
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+      const raw = window.localStorage.getItem(backupKey);
+      return raw ? (JSON.parse(raw) as ProfileBackupPayload) : null;
+    }
+    if (FileSystem.documentDirectory) {
+      const fileUri = `${FileSystem.documentDirectory}${backupKey}.json`;
+      const info = await FileSystem.getInfoAsync(fileUri);
+      if (info.exists) {
+        const raw = await FileSystem.readAsStringAsync(fileUri);
+        return JSON.parse(raw) as ProfileBackupPayload;
+      }
+    }
+  } catch {
+    // Bỏ qua lỗi đọc backup
+  }
+  return null;
+};
+
+const writeProfileBackup = async (backupKey: string, payload: ProfileBackupPayload): Promise<void> => {
+  try {
+    const serialized = JSON.stringify(payload);
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(backupKey, serialized);
+      return;
+    }
+    if (FileSystem.documentDirectory) {
+      const fileUri = `${FileSystem.documentDirectory}${backupKey}.json`;
+      await FileSystem.writeAsStringAsync(fileUri, serialized);
+    }
+  } catch {
+    // Bỏ qua lỗi ghi backup
   }
 };
 
@@ -55,6 +180,7 @@ export const ProfileModal: React.FC<{
 }> = ({ visible, colors, coupleId, onClose }) => {
   const { user } = useAuthStore();
   const currentUserId = user?.id || useSettingsStore.getState().activeUserId || 'local_me';
+  const backupKey = `${PARTNER_BACKUP_KEY_PREFIX}${coupleId || currentUserId}`;
 
   const {
     myProfile,
@@ -76,11 +202,20 @@ export const ProfileModal: React.FC<{
 
   const [myNick, setMyNick] = useState(myProfile.nickname);
   const [partnerNick, setPartnerNick] = useState(partnerProfile.nickname);
-  const [myBirthIso, setMyBirthIso] = useState<string | null>(myProfile.birthDate);
-  const [partnerBirthIso, setPartnerBirthIso] = useState<string | null>(partnerProfile.birthDate);
+  const [myBirthIso, setMyBirthIso] = useState<string | null>(myProfile.birthDate || null);
+  const [partnerBirthIso, setPartnerBirthIso] = useState<string | null>(
+    partnerProfile.birthDate || null,
+  );
   const [myMood, setMyMood] = useState(myProfile.moodEmoji);
-  const [myAvatarUri, setMyAvatarUri] = useState<string | null>(myProfile.avatarUri || null);
-  const [partnerAvatarUri, setPartnerAvatarUri] = useState<string | null>(partnerProfile.avatarUri || null);
+  const [myAvatarUri, setMyAvatarUri] = useState<string | null>(
+    sanitizeAvatarUri(myProfile.avatarUri),
+  );
+  const [partnerAvatarUri, setPartnerAvatarUri] = useState<string | null>(
+    sanitizeAvatarUri(partnerProfile.avatarUri),
+  );
+  const [myAvatarBroken, setMyAvatarBroken] = useState(false);
+  const [partnerAvatarBroken, setPartnerAvatarBroken] = useState(false);
+
   const [pickingTarget, setPickingTarget] = useState<'ME' | 'PARTNER' | null>(null);
   const lastPickingTargetRef = useRef<'ME' | 'PARTNER' | null>(null);
 
@@ -97,17 +232,90 @@ export const ProfileModal: React.FC<{
   const [randomIdea, setRandomIdea] = useState<string>(FUN_DATE_IDEAS[0]);
 
   const prevVisibleRef = useRef(false);
+  const restoredBackupRef = useRef(false);
 
-  // Chỉ đồng bộ state từ Store khi Modal được mở ra
+  // Tự động khôi phục ngày sinh & avatar của người thương nếu Store bị reset/null khi mới mở lại app
+  useEffect(() => {
+    let mounted = true;
+    const restoreIfMissing = async () => {
+      const cleanMyStoreAvatar = sanitizeAvatarUri(myProfile.avatarUri);
+      const cleanPartnerStoreAvatar = sanitizeAvatarUri(partnerProfile.avatarUri);
+
+      // Nếu phát hiện avatar trong store là link blob chết trên web thì làm sạch ngay để không bị trắng xóa
+      const hasDeadMyBlob = Boolean(myProfile.avatarUri && !cleanMyStoreAvatar);
+      const hasDeadPartnerBlob = Boolean(partnerProfile.avatarUri && !cleanPartnerStoreAvatar);
+
+      const backup = await readProfileBackup(backupKey);
+      if (!mounted) return;
+
+      const nextMyBirth = myProfile.birthDate || backup?.myBirthDate || null;
+      const nextMyAvatar = cleanMyStoreAvatar || sanitizeAvatarUri(backup?.myAvatarUri) || null;
+      const nextPartnerBirth = partnerProfile.birthDate || backup?.partnerBirthDate || null;
+      const nextPartnerAvatar =
+        cleanPartnerStoreAvatar || sanitizeAvatarUri(backup?.partnerAvatarUri) || null;
+
+      const needRestoreMy =
+        hasDeadMyBlob ||
+        (!myProfile.birthDate && Boolean(nextMyBirth)) ||
+        (!cleanMyStoreAvatar && Boolean(nextMyAvatar));
+      const needRestorePartner =
+        hasDeadPartnerBlob ||
+        (!partnerProfile.birthDate && Boolean(nextPartnerBirth)) ||
+        (!cleanPartnerStoreAvatar && Boolean(nextPartnerAvatar));
+
+      if ((needRestoreMy || needRestorePartner) && !restoredBackupRef.current) {
+        restoredBackupRef.current = true;
+        await updateProfiles(
+          {
+            birthDate: nextMyBirth,
+            avatarUri: nextMyAvatar,
+          },
+          {
+            birthDate: nextPartnerBirth,
+            avatarUri: nextPartnerAvatar,
+          },
+        );
+      }
+    };
+
+    void restoreIfMissing();
+    return () => {
+      mounted = false;
+    };
+  }, [
+    backupKey,
+    myProfile.birthDate,
+    myProfile.avatarUri,
+    partnerProfile.birthDate,
+    partnerProfile.avatarUri,
+    updateProfiles,
+  ]);
+
+  // Đồng bộ state từ Store (+ Backup) khi Modal được mở ra
   useEffect(() => {
     if (visible && !prevVisibleRef.current) {
       setMyNick(myProfile.nickname);
       setPartnerNick(partnerProfile.nickname);
-      setMyBirthIso(myProfile.birthDate);
-      setPartnerBirthIso(partnerProfile.birthDate);
       setMyMood(myProfile.moodEmoji);
-      setMyAvatarUri(myProfile.avatarUri || null);
-      setPartnerAvatarUri(partnerProfile.avatarUri || null);
+      setMyAvatarBroken(false);
+      setPartnerAvatarBroken(false);
+
+      const cleanMyAvatar = sanitizeAvatarUri(myProfile.avatarUri);
+      const cleanPartnerAvatar = sanitizeAvatarUri(partnerProfile.avatarUri);
+
+      setMyBirthIso(myProfile.birthDate || null);
+      setPartnerBirthIso(partnerProfile.birthDate || null);
+      setMyAvatarUri(cleanMyAvatar);
+      setPartnerAvatarUri(cleanPartnerAvatar);
+
+      // Kiểm tra thêm từ backup phòng trường hợp store vừa bị ghi đè null
+      void readProfileBackup(backupKey).then((backup) => {
+        if (!backup) return;
+        setMyBirthIso((cur) => cur || backup.myBirthDate || null);
+        setPartnerBirthIso((cur) => cur || backup.partnerBirthDate || null);
+        setMyAvatarUri((cur) => cur || sanitizeAvatarUri(backup.myAvatarUri));
+        setPartnerAvatarUri((cur) => cur || sanitizeAvatarUri(backup.partnerAvatarUri));
+      });
 
       setFavDrink(myPrivateNote.favDrink);
       setShoeClothSize(myPrivateNote.shoeClothSize);
@@ -115,7 +323,7 @@ export const ProfileModal: React.FC<{
       setSecretNote(myPrivateNote.secretNote || '');
     }
     prevVisibleRef.current = visible;
-  }, [visible, myProfile, partnerProfile, myPrivateNote]);
+  }, [visible, backupKey, myProfile, partnerProfile, myPrivateNote]);
 
   const openDatePicker = (target: 'ME' | 'PARTNER') => {
     lastPickingTargetRef.current = target;
@@ -163,20 +371,24 @@ export const ProfileModal: React.FC<{
     return { overall, foodMatch, telepathy };
   }, [myNick, partnerNick, myBirthIso, partnerBirthIso]);
 
-  // Chọn ảnh avatar và lưu vào local state (Không gọi updateProfiles ngay lập tức)
+  // Chọn ảnh đại diện và chuyển ngay sang chuỗi Base64 bền vững (Không dùng link blob tạm thời)
   const pickAvatar = async (target: 'ME' | 'PARTNER') => {
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.75,
+      quality: 0.65,
+      base64: true,
     });
     if (!res.canceled && res.assets?.[0]) {
-      const selectedUri = res.assets[0].uri;
+      const asset = res.assets[0];
+      const permanentDataUri = await saveAvatarPermanently(asset.uri, asset.base64);
       if (target === 'ME') {
-        setMyAvatarUri(selectedUri);
+        setMyAvatarBroken(false);
+        setMyAvatarUri(permanentDataUri);
       } else {
-        setPartnerAvatarUri(selectedUri);
+        setPartnerAvatarBroken(false);
+        setPartnerAvatarUri(permanentDataUri);
       }
     }
   };
@@ -273,22 +485,33 @@ export const ProfileModal: React.FC<{
 
   // Lưu toàn bộ thông tin profile & avatar vĩnh viễn
   const handleSaveProfile = async () => {
-    // 1. Lưu ảnh đại diện từ Cache sang thư mục vĩnh viễn (DocumentDirectory)
     const permanentMyAvatar = await saveAvatarPermanently(myAvatarUri);
     const permanentPartnerAvatar = await saveAvatarPermanently(partnerAvatarUri);
+
+    const finalMyBirth = myBirthIso || null;
+    const finalPartnerBirth = partnerBirthIso || null;
+
+    // 1. Lưu bản sao dự phòng cục bộ trước để tránh bị mất khi thoát app / reload
+    await writeProfileBackup(backupKey, {
+      myBirthDate: finalMyBirth,
+      myAvatarUri: permanentMyAvatar,
+      partnerNickname: partnerNick.trim() || 'Người ấy',
+      partnerBirthDate: finalPartnerBirth,
+      partnerAvatarUri: permanentPartnerAvatar,
+    });
 
     // 2. Cập nhật Store đồng thời cả Tên, Ngày sinh và Avatar vĩnh viễn
     await updateProfiles(
       {
         nickname: myNick.trim() || 'Bạn',
-        birthDate: myBirthIso,
+        birthDate: finalMyBirth,
         moodEmoji: myMood,
         avatarUri: permanentMyAvatar,
         lastActiveAt: 'Đang hoạt động',
       },
       {
         nickname: partnerNick.trim() || 'Người ấy',
-        birthDate: partnerBirthIso,
+        birthDate: finalPartnerBirth,
         avatarUri: permanentPartnerAvatar,
       },
     );
@@ -393,9 +616,40 @@ export const ProfileModal: React.FC<{
 
                 <View style={[styles.profileSection, { borderColor: colors.borderSubtle }]}>
                   <View style={styles.sectionHeaderRow}>
-                    <Text style={[styles.subHeading, { color: colors.textPrimary, marginBottom: 0 }]}>
-                      Bạn ({myNick.trim() || myProfile.nickname})
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                      <View
+                        style={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: 20,
+                          backgroundColor: colors.primaryContainer,
+                          justifyContent: 'center',
+                          alignItems: 'center',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {myAvatarUri && !myAvatarBroken ? (
+                          <Image
+                            source={{ uri: myAvatarUri }}
+                            style={{ width: 40, height: 40 }}
+                            resizeMode="cover"
+                            onError={() => {
+                              setMyAvatarBroken(true);
+                              setMyAvatarUri(null);
+                            }}
+                          />
+                        ) : (
+                          <Text style={{ fontSize: 18 }}>{myMood || '😊'}</Text>
+                        )}
+                      </View>
+                      <Text
+                        style={[styles.subHeading, { color: colors.textPrimary, marginBottom: 0, flex: 1 }]}
+                        numberOfLines={1}
+                      >
+                        Bạn ({myNick.trim() || myProfile.nickname})
+                      </Text>
+                    </View>
+
                     <Pressable
                       style={[styles.inlineActionChip, { backgroundColor: colors.primaryContainer }]}
                       onPress={() => void pickAvatar('ME')}
@@ -436,9 +690,40 @@ export const ProfileModal: React.FC<{
 
                 <View style={[styles.profileSection, { borderColor: colors.borderSubtle }]}>
                   <View style={styles.sectionHeaderRow}>
-                    <Text style={[styles.subHeading, { color: colors.textPrimary, marginBottom: 0 }]}>
-                      Người thương ({partnerNick.trim() || partnerProfile.nickname})
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                      <View
+                        style={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: 20,
+                          backgroundColor: colors.surfaceVariant,
+                          justifyContent: 'center',
+                          alignItems: 'center',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {partnerAvatarUri && !partnerAvatarBroken ? (
+                          <Image
+                            source={{ uri: partnerAvatarUri }}
+                            style={{ width: 40, height: 40 }}
+                            resizeMode="cover"
+                            onError={() => {
+                              setPartnerAvatarBroken(true);
+                              setPartnerAvatarUri(null);
+                            }}
+                          />
+                        ) : (
+                          <Text style={{ fontSize: 18 }}>{partnerProfile.moodEmoji || '🥰'}</Text>
+                        )}
+                      </View>
+                      <Text
+                        style={[styles.subHeading, { color: colors.textPrimary, marginBottom: 0, flex: 1 }]}
+                        numberOfLines={1}
+                      >
+                        Người thương ({partnerNick.trim() || partnerProfile.nickname})
+                      </Text>
+                    </View>
+
                     <Pressable
                       style={[styles.inlineActionChip, { backgroundColor: colors.primaryContainer }]}
                       onPress={() => void pickAvatar('PARTNER')}

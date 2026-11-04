@@ -1,6 +1,6 @@
 // src/store/useSettingsStore.ts
 import { create } from 'zustand';
-import { AccessibilityInfo } from 'react-native';
+import { AccessibilityInfo, Platform } from 'react-native';
 import { storage } from '../services/storage';
 import { api } from '../services/api';
 import { uploadHeroWallpaperToCloud } from '../services/cloudMediaService';
@@ -176,15 +176,28 @@ const getUserPrivateStorageKey = (userId?: string | null) =>
 // Đếm số lần lưu đang chạy dở, lúc đó không kéo dữ liệu từ server để tránh đè lên thay đổi vừa nhập
 let pendingLocalWrites = 0;
 
-const isRemoteUrl = (uri?: string | null): uri is string =>
+// Chấp nhận cả URL http(s) VÀ chuỗi ảnh Base64 (data:image/...) để đồng bộ xuyên suốt giữa các thiết bị
+const isSyncableMediaUri = (uri?: string | null): uri is string =>
+  typeof uri === 'string' && (/^https?:\/\//i.test(uri) || /^data:image\//i.test(uri));
+
+const isCloudHttpUrl = (uri?: string | null): uri is string =>
   typeof uri === 'string' && /^https?:\/\//i.test(uri);
 
-// Dữ liệu kéo từ server có thể chứa đường dẫn file nội bộ của máy đối phương.
-// Máy này không đọc được các đường dẫn đó nên chỉ giữ lại link http(s).
+// Loại bỏ các đường dẫn rỗng hoặc link blob: đã chết trên trình duyệt gây hiện tượng avatar trắng xóa
+const cleanAvatarUri = (uri?: string | null): string | null => {
+  if (!uri || typeof uri !== 'string') return null;
+  const trimmed = uri.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return null;
+  if (Platform.OS === 'web' && trimmed.startsWith('blob:')) return null;
+  return trimmed;
+};
+
+// Dữ liệu kéo từ server có thể chứa đường dẫn file:// nội bộ của máy đối phương.
+// Giữ lại link http(s) và data:image/... (Base64) để cả 2 máy đều hiển thị được.
 function sanitizeRemoteRoomPayload(remote: any) {
   const next = { ...remote };
 
-  if (!isRemoteUrl(next.heroWallpaperUri)) {
+  if (!isSyncableMediaUri(next.heroWallpaperUri)) {
     delete next.heroWallpaperUri;
   }
 
@@ -194,7 +207,7 @@ function sanitizeRemoteRoomPayload(remote: any) {
     for (const [uid, prof] of Object.entries(rawMap)) {
       if (prof && typeof prof === 'object') {
         const { avatarUri, ...rest } = prof as any;
-        cleanMembers[uid] = isRemoteUrl(avatarUri) ? { ...rest, avatarUri } : rest;
+        cleanMembers[uid] = isSyncableMediaUri(avatarUri) ? { ...rest, avatarUri } : rest;
       } else {
         cleanMembers[uid] = prof;
       }
@@ -306,6 +319,47 @@ const DEFAULT_SOCIAL_PREFS: SocialMessengerPrefs = {
   heartTapHaptics: true,
 };
 
+// Hàm gộp 2 hồ sơ an toàn: không bao giờ để giá trị null/rỗng đè mất birthDate hay avatarUri đã có
+function mergeProfilePreservingData(
+  base: PersonProfile,
+  incoming?: Partial<PersonProfile> | null,
+  fallback?: Partial<PersonProfile> | null,
+): PersonProfile {
+  const inc = incoming || {};
+  const fb = fallback || {};
+
+  const incomingNick = inc.nickname?.trim();
+  const baseNick = base.nickname?.trim();
+  const fbNick = fb.nickname?.trim();
+  const isGenericNick = (n?: string) =>
+    !n || n === 'Bạn' || n === 'Người ấy' || n === 'Bạn Đời' || n === 'User';
+
+  const finalNickname = !isGenericNick(incomingNick)
+    ? incomingNick!
+    : !isGenericNick(baseNick)
+      ? baseNick!
+      : !isGenericNick(fbNick)
+        ? fbNick!
+        : incomingNick || baseNick || fbNick || base.nickname;
+
+  return {
+    ...base,
+    ...fb,
+    ...inc,
+    nickname: finalNickname,
+    birthDate: inc.birthDate || base.birthDate || fb.birthDate || null,
+    avatarUri:
+      cleanAvatarUri(inc.avatarUri) ||
+      cleanAvatarUri(base.avatarUri) ||
+      cleanAvatarUri(fb.avatarUri) ||
+      null,
+    moodEmoji: inc.moodEmoji || base.moodEmoji || fb.moodEmoji || '😊',
+    customStatusText:
+      inc.customStatusText || base.customStatusText || fb.customStatusText || 'Trực tuyến',
+    lastActiveAt: inc.lastActiveAt || base.lastActiveAt || fb.lastActiveAt || 'Đang hoạt động',
+  };
+}
+
 function resolveProfilesForViewer(
   membersById: Record<string, PersonProfile>,
   currentUserId: string | null,
@@ -316,31 +370,45 @@ function resolveProfilesForViewer(
 
   if (!currentUserId) {
     return {
-      myProfile: fallbackMy || { ...DEFAULT_MY_PROFILE },
-      partnerProfile: fallbackPartner || { ...DEFAULT_PARTNER_PROFILE },
+      myProfile: mergeProfilePreservingData(DEFAULT_MY_PROFILE, fallbackMy),
+      partnerProfile: mergeProfilePreservingData(DEFAULT_PARTNER_PROFILE, fallbackPartner),
     };
   }
 
   const myEntry = membersById[currentUserId];
-  // Ưu tiên chọn Key thực (không phải key tạm partner_in_...)
-  const partnerPair =
-    allEntries.find(
-      ([uid]) => String(uid) !== String(currentUserId) && !uid.startsWith('partner_in_') && !uid.startsWith('local_'),
-    ) || allEntries.find(([uid]) => String(uid) !== String(currentUserId));
 
-  const partnerEntry = partnerPair ? partnerPair[1] : undefined;
+  // Tìm tất cả các entry không phải của mình (bao gồm cả key thật và key tạm partner_in_...)
+  const partnerEntries = allEntries.filter(([uid]) => String(uid) !== String(currentUserId));
+  const realPartnerPair = partnerEntries.find(
+    ([uid]) => !uid.startsWith('partner_in_') && !uid.startsWith('local_'),
+  );
+  const primaryPartnerPair = realPartnerPair || partnerEntries[0];
 
-  const resolvedMy: PersonProfile = myEntry
-    ? { ...DEFAULT_MY_PROFILE, ...myEntry, userId: currentUserId }
-    : { ...(fallbackMy || DEFAULT_MY_PROFILE), userId: currentUserId };
+  // Gộp dữ liệu từ mọi entry của partner (để nếu birthDate/avatarUri nằm ở key tạm partner_in_... thì vẫn giữ được)
+  let aggregatedPartner: Partial<PersonProfile> = { ...(fallbackPartner || {}) };
+  for (const [, prof] of partnerEntries) {
+    aggregatedPartner = mergeProfilePreservingData(
+      DEFAULT_PARTNER_PROFILE,
+      prof,
+      aggregatedPartner,
+    );
+  }
 
-  const resolvedPartner: PersonProfile = partnerEntry
-    ? {
-        ...DEFAULT_PARTNER_PROFILE,
-        ...partnerEntry,
-        userId: partnerPair ? partnerPair[0] : partnerEntry.userId || null,
-      }
-    : { ...(fallbackPartner || DEFAULT_PARTNER_PROFILE) };
+  const resolvedMy: PersonProfile = {
+    ...mergeProfilePreservingData(DEFAULT_MY_PROFILE, myEntry, fallbackMy),
+    userId: currentUserId,
+  };
+
+  const resolvedPartner: PersonProfile = {
+    ...mergeProfilePreservingData(
+      DEFAULT_PARTNER_PROFILE,
+      primaryPartnerPair ? primaryPartnerPair[1] : undefined,
+      aggregatedPartner,
+    ),
+    userId: primaryPartnerPair
+      ? primaryPartnerPair[0]
+      : fallbackPartner?.userId || null,
+  };
 
   return { myProfile: resolvedMy, partnerProfile: resolvedPartner };
 }
@@ -389,6 +457,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     const sharedPayload = {
       coupleId: s.activeCoupleId,
       membersById: s.membersById,
+      // Lưu trực tiếp cả myProfile và partnerProfile vào Storage để khi mở lại app luôn có đủ birthDate & avatarUri
+      myProfile: s.myProfile,
+      partnerProfile: s.partnerProfile,
       themePreset: s.themePreset,
       colorMode: s.colorMode,
       counterStyle: s.counterStyle,
@@ -529,15 +600,41 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         }
         const parsedPrivate = rawPrivate ? JSON.parse(rawPrivate) : {};
 
-        const nextMembersById: Record<string, PersonProfile> = {
-          ...(parsedRoom.membersById || {}),
-        };
+        const nextMembersById: Record<string, PersonProfile> = {};
+        for (const [uid, prof] of Object.entries(parsedRoom.membersById || {})) {
+          if (prof && typeof prof === 'object') {
+            nextMembersById[uid] = {
+              ...(prof as PersonProfile),
+              avatarUri: cleanAvatarUri((prof as PersonProfile).avatarUri),
+            };
+          }
+        }
 
-        if (targetUserId && !nextMembersById[targetUserId] && parsedRoom.myProfile) {
+        if (targetUserId && parsedRoom.myProfile) {
           nextMembersById[targetUserId] = {
-            ...DEFAULT_MY_PROFILE,
-            ...parsedRoom.myProfile,
+            ...mergeProfilePreservingData(
+              DEFAULT_MY_PROFILE,
+              nextMembersById[targetUserId],
+              parsedRoom.myProfile,
+            ),
             userId: targetUserId,
+          };
+        }
+
+        // Khôi phục đầy đủ cả partnerProfile đã lưu trong parsedRoom (bao gồm birthDate và avatarUri)
+        if (parsedRoom.partnerProfile) {
+          const existingPartnerKey =
+            parsedRoom.partnerProfile.userId ||
+            Object.keys(nextMembersById).find((k) => String(k) !== String(targetUserId)) ||
+            `partner_in_${targetCoupleId || 'room'}`;
+
+          nextMembersById[existingPartnerKey] = {
+            ...mergeProfilePreservingData(
+              DEFAULT_PARTNER_PROFILE,
+              nextMembersById[existingPartnerKey],
+              parsedRoom.partnerProfile,
+            ),
+            userId: existingPartnerKey,
           };
         }
 
@@ -628,42 +725,67 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         const remoteMembers =
           sharedRoomPayload?.membersById || sharedRoomPayload?.profiles || {};
 
-        // 1. Cập nhật dữ liệu mới từ Server vào Local nhưng GIỮ LẠI avatarUri của mình nếu server chưa có
+        // 1. Gộp dữ liệu từ Server vào Local nhưng BẢO TỒN birthDate và avatarUri của CẢ 2 NGƯỜI nếu server trả về null
         for (const [uid, remoteProf] of Object.entries(remoteMembers)) {
           if (remoteProf && typeof remoteProf === 'object') {
             const prevProf = mergedMembers[uid];
-            const remoteTyped = remoteProf as Partial<PersonProfile>;
+            const isMe = String(uid) === String(userId);
+            const fallbackStateProf = isMe ? state.myProfile : state.partnerProfile;
+
             mergedMembers[uid] = {
-              ...DEFAULT_MY_PROFILE,
-              ...(prevProf || {}),
-              ...remoteTyped,
-              // Nếu là chính mình và trên máy đang có ảnh mà server trả về null/rỗng -> giữ nguyên ảnh trên máy!
-              avatarUri:
-                remoteTyped.avatarUri ||
-                (String(uid) === String(userId) ? prevProf?.avatarUri || state.myProfile.avatarUri : prevProf?.avatarUri) ||
-                null,
+              ...mergeProfilePreservingData(
+                isMe ? DEFAULT_MY_PROFILE : DEFAULT_PARTNER_PROFILE,
+                remoteProf as Partial<PersonProfile>,
+                mergeProfilePreservingData(
+                  isMe ? DEFAULT_MY_PROFILE : DEFAULT_PARTNER_PROFILE,
+                  prevProf,
+                  fallbackStateProf,
+                ),
+              ),
               userId: uid,
             };
           }
         }
 
-        // 2. Dọn dẹp key tạm ("partner_in_...") khi đã có thông tin user ID thực sự
-        const realKeys = Object.keys(mergedMembers).filter(
-          (k) => !k.startsWith('partner_in_') && !k.startsWith('local_'),
-        );
-        if (realKeys.length >= 2 || partnerId) {
-          Object.keys(mergedMembers).forEach((k) => {
-            if (k.startsWith('partner_in_') || k.startsWith('local_')) {
-              delete mergedMembers[k];
-            }
-          });
-        }
+        // 2. Gom toàn bộ dữ liệu Partner đang nằm ở các key tạm (partner_in_..., local_...) TRƯỚC KHI xóa key tạm!
+        let stashedPartnerData: Partial<PersonProfile> = { ...state.partnerProfile };
+        Object.entries(mergedMembers).forEach(([k, prof]) => {
+          if (String(k) !== String(userId)) {
+            stashedPartnerData = mergeProfilePreservingData(
+              DEFAULT_PARTNER_PROFILE,
+              prof,
+              stashedPartnerData,
+            );
+          }
+        });
 
-        // 3. Chuẩn hóa hồ sơ bản thân
-        const existingMe = mergedMembers[userId] || {
-          ...DEFAULT_MY_PROFILE,
-          userId,
-        };
+        // 3. Định vị chính xác ID của Partner
+        const realPartnerKey = Object.keys(mergedMembers).find(
+          (k) =>
+            String(k) !== String(userId) &&
+            !k.startsWith('partner_in_') &&
+            !k.startsWith('local_'),
+        );
+        const finalPartnerKey =
+          partnerId || realPartnerKey || `partner_in_${targetCoupleId || 'room'}`;
+
+        // 4. Dọn dẹp các key tạm không khớp với finalPartnerKey (dữ liệu đã được cất vào stashedPartnerData ở Bước 2)
+        Object.keys(mergedMembers).forEach((k) => {
+          if (
+            String(k) !== String(userId) &&
+            String(k) !== String(finalPartnerKey) &&
+            (k.startsWith('partner_in_') || k.startsWith('local_') || Boolean(partnerId))
+          ) {
+            delete mergedMembers[k];
+          }
+        });
+
+        // 5. Chuẩn hóa hồ sơ bản thân (bảo toàn birthDate & avatarUri)
+        const existingMe = mergeProfilePreservingData(
+          DEFAULT_MY_PROFILE,
+          mergedMembers[userId],
+          state.myProfile,
+        );
         const isGenericMyName =
           !existingMe.nickname ||
           existingMe.nickname === 'Bạn' ||
@@ -674,26 +796,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           userId,
           nickname:
             isGenericMyName && myFullName ? myFullName.trim() : existingMe.nickname || 'Bạn',
-          avatarUri: existingMe.avatarUri || state.myProfile.avatarUri || myAvatarUrl || null,
+          avatarUri:
+            cleanAvatarUri(existingMe.avatarUri) ||
+            cleanAvatarUri(state.myProfile.avatarUri) ||
+            cleanAvatarUri(myAvatarUrl) ||
+            null,
+          birthDate: existingMe.birthDate || state.myProfile.birthDate || null,
         };
 
-        // 4. Định vị chính xác ID của Partner
-        const candidatePartnerKey =
-          partnerId ||
-          Object.keys(mergedMembers).find(
-            (k) => String(k) !== String(userId) && !k.startsWith('partner_in_'),
-          ) ||
-          `partner_in_${targetCoupleId || 'room'}`;
-
-        if (partnerId && candidatePartnerKey !== partnerId && mergedMembers[candidatePartnerKey]) {
-          delete mergedMembers[candidatePartnerKey];
-        }
-
-        const finalPartnerKey = partnerId || candidatePartnerKey;
-        const existingPartner = mergedMembers[finalPartnerKey] || {
-          ...DEFAULT_PARTNER_PROFILE,
-          userId: finalPartnerKey,
-        };
+        // 6. Chuẩn hóa hồ sơ Partner (bảo toàn 100% birthDate & avatarUri từ stashedPartnerData)
+        const existingPartner = mergeProfilePreservingData(
+          DEFAULT_PARTNER_PROFILE,
+          mergedMembers[finalPartnerKey],
+          stashedPartnerData,
+        );
         const isGenericPartnerName =
           !existingPartner.nickname ||
           existingPartner.nickname === 'Bạn Đời' ||
@@ -706,14 +822,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
             isGenericPartnerName && partnerName
               ? partnerName.trim()
               : existingPartner.nickname || 'Người ấy',
-          avatarUri: existingPartner.avatarUri || partnerAvatarUrl || null,
+          avatarUri:
+            cleanAvatarUri(existingPartner.avatarUri) ||
+            cleanAvatarUri(stashedPartnerData.avatarUri) ||
+            cleanAvatarUri(partnerAvatarUrl) ||
+            null,
+          birthDate:
+            existingPartner.birthDate ||
+            stashedPartnerData.birthDate ||
+            state.partnerProfile.birthDate ||
+            null,
         };
 
         const { myProfile, partnerProfile } = resolveProfilesForViewer(
           mergedMembers,
           userId,
-          state.myProfile,
-          state.partnerProfile,
+          mergedMembers[userId],
+          mergedMembers[finalPartnerKey],
         );
 
         const nextCoupons = normalizeCouponsForRoom(
@@ -722,11 +847,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           finalPartnerKey,
         );
 
-        // CHỈ cập nhật heroWallpaperUri từ server nếu nó thực sự là link hợp lệ,
-        // KHÔNG lấy giá trị null/undefined từ server đè mất ảnh người dùng vừa chọn trên máy
-        const nextHeroWallpaperUri = isRemoteUrl(sharedRoomPayload?.heroWallpaperUri)
-  ? sharedRoomPayload.heroWallpaperUri
-  : state.heroWallpaperUri;
+        const nextHeroWallpaperUri = isSyncableMediaUri(sharedRoomPayload?.heroWallpaperUri)
+          ? sharedRoomPayload.heroWallpaperUri
+          : state.heroWallpaperUri;
 
         return {
           activeUserId: userId,
@@ -790,7 +913,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         streakDays: 1,
         heartTapTotal: 0,
         lastMissYouSentAt: null,
-        momoFund: { ...DEFAULT_MOMO_FUND, quickAmounts: [...DEFAULT_MOMO_FUND.quickAmounts], contributions: [] },
+        momoFund: {
+          ...DEFAULT_MOMO_FUND,
+          quickAmounts: [...DEFAULT_MOMO_FUND.quickAmounts],
+          contributions: [],
+        },
         isAppLocked: false,
       });
     },
@@ -803,24 +930,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     updateAppearance: async (patch) => {
       pendingLocalWrites += 1;
       try {
-      set((state) => ({ ...state, ...patch }));
+        set((state) => ({ ...state, ...patch }));
 
-      const pickedWallpaper = patch.heroWallpaperUri;
-      if (pickedWallpaper && !isRemoteUrl(pickedWallpaper)) {
-        // Lưu tạm ở máy trước để không mất nếu app bị tắt giữa lúc upload
-        await persistSharedRoomState(false);
-        try {
-          const cloudUrl = await uploadHeroWallpaperToCloud(pickedWallpaper);
-          // Chỉ thay bằng link online nếu trong lúc upload người dùng chưa đổi sang hình khác
-          if (get().heroWallpaperUri === pickedWallpaper) {
-            set({ heroWallpaperUri: cloudUrl });
+        const pickedWallpaper = patch.heroWallpaperUri;
+        if (pickedWallpaper && !isCloudHttpUrl(pickedWallpaper)) {
+          await persistSharedRoomState(false);
+          try {
+            const cloudUrl = await uploadHeroWallpaperToCloud(pickedWallpaper);
+            if (get().heroWallpaperUri === pickedWallpaper) {
+              set({ heroWallpaperUri: cloudUrl });
+            }
+          } catch {
+            // Mất mạng: giữ đường dẫn nội bộ / base64
           }
-        } catch {
-          // Mất mạng: giữ đường dẫn nội bộ, ảnh đã nằm trong hàng đợi upload bù
         }
-      }
 
-      await persistSharedRoomState(true);
+        await persistSharedRoomState(true);
       } finally {
         pendingLocalWrites -= 1;
       }
@@ -843,70 +968,143 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     updateProfiles: async (myPatch, partnerPatch) => {
       pendingLocalWrites += 1;
       try {
-      set((state) => {
-        const myUid = state.activeUserId || 'local_me';
-        const partnerKeyFromMembers = Object.keys(state.membersById).find(
-          (k) => String(k) !== String(myUid) && !k.startsWith('partner_in_'),
-        );
-        const existingPartnerUid =
-          state.partnerProfile.userId ||
-          partnerKeyFromMembers ||
-          Object.keys(state.membersById).find((k) => String(k) !== String(myUid)) ||
-          `partner_in_${state.activeCoupleId || 'room'}`;
+        let resolvedPartnerUid = '';
 
-        const updatedMy: PersonProfile = myPatch
-          ? { ...state.myProfile, ...myPatch, userId: myUid }
-          : { ...state.myProfile, userId: myUid };
+        set((state) => {
+          const myUid = state.activeUserId || 'local_me';
+          const partnerKeyFromMembers = Object.keys(state.membersById).find(
+            (k) =>
+              String(k) !== String(myUid) &&
+              !k.startsWith('partner_in_') &&
+              !k.startsWith('local_'),
+          );
+          const existingPartnerUid =
+            (state.partnerProfile.userId &&
+            !state.partnerProfile.userId.startsWith('partner_in_')
+              ? state.partnerProfile.userId
+              : null) ||
+            partnerKeyFromMembers ||
+            state.partnerProfile.userId ||
+            Object.keys(state.membersById).find((k) => String(k) !== String(myUid)) ||
+            `partner_in_${state.activeCoupleId || 'room'}`;
 
-        const updatedPartner: PersonProfile = partnerPatch
-          ? { ...state.partnerProfile, ...partnerPatch, userId: existingPartnerUid }
-          : { ...state.partnerProfile, userId: existingPartnerUid };
+          resolvedPartnerUid = existingPartnerUid;
 
-        const nextMembersById: Record<string, PersonProfile> = {
-          ...state.membersById,
-          [myUid]: updatedMy,
-          [existingPartnerUid]: updatedPartner,
-        };
+          const updatedMy: PersonProfile = myPatch
+            ? {
+                ...state.myProfile,
+                ...myPatch,
+                avatarUri:
+                  myPatch.avatarUri !== undefined
+                    ? cleanAvatarUri(myPatch.avatarUri)
+                    : cleanAvatarUri(state.myProfile.avatarUri),
+                userId: myUid,
+              }
+            : {
+                ...state.myProfile,
+                avatarUri: cleanAvatarUri(state.myProfile.avatarUri),
+                userId: myUid,
+              };
 
-        if (partnerKeyFromMembers) {
+          const updatedPartner: PersonProfile = partnerPatch
+            ? {
+                ...state.partnerProfile,
+                ...partnerPatch,
+                avatarUri:
+                  partnerPatch.avatarUri !== undefined
+                    ? cleanAvatarUri(partnerPatch.avatarUri)
+                    : cleanAvatarUri(state.partnerProfile.avatarUri),
+                userId: existingPartnerUid,
+              }
+            : {
+                ...state.partnerProfile,
+                avatarUri: cleanAvatarUri(state.partnerProfile.avatarUri),
+                userId: existingPartnerUid,
+              };
+
+          const nextMembersById: Record<string, PersonProfile> = {
+            ...state.membersById,
+            [myUid]: updatedMy,
+            [existingPartnerUid]: updatedPartner,
+          };
+
+          // Xóa các key tạm nếu đã có key chính thức
           Object.keys(nextMembersById).forEach((k) => {
-            if (k.startsWith('partner_in_')) {
+            if (
+              String(k) !== String(myUid) &&
+              String(k) !== String(existingPartnerUid) &&
+              (k.startsWith('partner_in_') || k.startsWith('local_'))
+            ) {
               delete nextMembersById[k];
             }
           });
-        }
 
-        return {
-          membersById: nextMembersById,
-          myProfile: updatedMy,
-          partnerProfile: updatedPartner,
-        };
-      });
+          return {
+            membersById: nextMembersById,
+            myProfile: updatedMy,
+            partnerProfile: updatedPartner,
+          };
+        });
 
-      const pickedAvatar = myPatch?.avatarUri;
-      if (pickedAvatar && !isRemoteUrl(pickedAvatar)) {
+        // Lưu xuống bộ nhớ máy ngay lập tức trước khi thử upload ảnh lên Cloud
         await persistSharedRoomState(false);
-        try {
-          const cloudUrl = await uploadHeroWallpaperToCloud(pickedAvatar);
-          if (get().myProfile.avatarUri === pickedAvatar) {
-            set((state) => {
-              const myUid = state.activeUserId || 'local_me';
-              const nextMy: PersonProfile = { ...state.myProfile, avatarUri: cloudUrl };
-              return {
-                myProfile: nextMy,
-                membersById: {
-                  ...state.membersById,
-                  [myUid]: { ...(state.membersById[myUid] || nextMy), avatarUri: cloudUrl },
-                },
-              };
-            });
-          }
-        } catch {
-          // Mất mạng: giữ avatar nội bộ, lần lưu Profile sau sẽ thử upload lại
-        }
-      }
 
-      await persistSharedRoomState(true);
+        // Upload ảnh đại diện của BẢN THÂN lên Cloud nếu chưa phải link http(s)
+        const pickedMyAvatar = cleanAvatarUri(myPatch?.avatarUri);
+        if (pickedMyAvatar && !isCloudHttpUrl(pickedMyAvatar)) {
+          try {
+            const cloudUrl = await uploadHeroWallpaperToCloud(pickedMyAvatar);
+            if (cloudUrl && get().myProfile.avatarUri === pickedMyAvatar) {
+              set((state) => {
+                const myUid = state.activeUserId || 'local_me';
+                const nextMy: PersonProfile = { ...state.myProfile, avatarUri: cloudUrl };
+                return {
+                  myProfile: nextMy,
+                  membersById: {
+                    ...state.membersById,
+                    [myUid]: { ...(state.membersById[myUid] || nextMy), avatarUri: cloudUrl },
+                  },
+                };
+              });
+            }
+          } catch {
+            // Nếu upload cloud lỗi, giữ nguyên chuỗi Base64/local URI đã lưu
+          }
+        }
+
+        // Upload ảnh đại diện của NGƯỜI THƯƠNG lên Cloud (Fix lỗi mất ảnh & trắng ảnh của user còn lại)
+        const pickedPartnerAvatar = cleanAvatarUri(partnerPatch?.avatarUri);
+        if (pickedPartnerAvatar && !isCloudHttpUrl(pickedPartnerAvatar)) {
+          try {
+            const cloudPartnerUrl = await uploadHeroWallpaperToCloud(pickedPartnerAvatar);
+            if (cloudPartnerUrl && get().partnerProfile.avatarUri === pickedPartnerAvatar) {
+              set((state) => {
+                const pUid =
+                  resolvedPartnerUid ||
+                  state.partnerProfile.userId ||
+                  `partner_in_${state.activeCoupleId || 'room'}`;
+                const nextPartner: PersonProfile = {
+                  ...state.partnerProfile,
+                  avatarUri: cloudPartnerUrl,
+                };
+                return {
+                  partnerProfile: nextPartner,
+                  membersById: {
+                    ...state.membersById,
+                    [pUid]: {
+                      ...(state.membersById[pUid] || nextPartner),
+                      avatarUri: cloudPartnerUrl,
+                    },
+                  },
+                };
+              });
+            }
+          } catch {
+            // Nếu upload cloud lỗi, chuỗi Base64 vẫn được giữ nguyên và đồng bộ qua shared-settings
+          }
+        }
+
+        await persistSharedRoomState(true);
       } finally {
         pendingLocalWrites -= 1;
       }
