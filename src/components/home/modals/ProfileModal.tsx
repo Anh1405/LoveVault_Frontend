@@ -34,17 +34,17 @@ const sanitizeAvatarUri = (uri: string | null | undefined): string | null => {
   if (!uri || typeof uri !== 'string') return null;
   const trimmed = uri.trim();
   if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return null;
-  
+
   // Cho phép dạng Base64 vĩnh viễn
   if (trimmed.startsWith('data:image/')) {
     return trimmed;
   }
-  
+
   // Loại bỏ link blob tạm thời trên Web
   if (Platform.OS === 'web' && trimmed.startsWith('blob:')) {
     return null;
   }
-  
+
   return trimmed;
 };
 
@@ -247,6 +247,11 @@ export const ProfileModal: React.FC<{
   const prevVisibleRef = useRef(false);
   const isDirtyRef = useRef(false);
 
+  // Chỉ gửi avatar lên server khi người dùng THỰC SỰ vừa chọn ảnh mới cho người đó.
+  // Tránh việc mỗi lần Lưu đều ghi đè avatar của người kia bằng bản cache cũ/null.
+  const myAvatarChangedRef = useRef(false);
+  const partnerAvatarChangedRef = useRef(false);
+
   // Xóa bộ nhớ backup v1 cũ (nếu có) từng gây lỗi trộn hồ sơ giữa 2 tài khoản
   useEffect(() => {
     if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage && coupleId) {
@@ -256,64 +261,63 @@ export const ProfileModal: React.FC<{
   }, [coupleId]);
 
   // Đồng bộ state từ Store (+ Backup theo đúng ID từng người) khi Modal được mở ra
-  // File: src/components/home/modals/ProfileModal.tsx
+  useEffect(() => {
+    if (visible && !prevVisibleRef.current) {
+      isDirtyRef.current = false;
+      myAvatarChangedRef.current = false;
+      partnerAvatarChangedRef.current = false;
+      setMyNick(myProfile.nickname);
+      setPartnerNick(partnerProfile.nickname);
+      setMyMood(myProfile.moodEmoji);
+      setMyAvatarBroken(false);
+      setPartnerAvatarBroken(false);
 
-// 1. Tại useEffect đồng bộ khi mở Modal (Dòng 195 - 238):
-useEffect(() => {
-  if (visible && !prevVisibleRef.current) {
-    isDirtyRef.current = false;
-    setMyNick(myProfile.nickname);
-    setPartnerNick(partnerProfile.nickname);
-    setMyMood(myProfile.moodEmoji);
-    setMyAvatarBroken(false);
-    setPartnerAvatarBroken(false);
+      const cleanMyAvatar = sanitizeAvatarUri(myProfile.avatarUri);
+      const cleanPartnerAvatar = sanitizeAvatarUri(partnerProfile.avatarUri);
 
-    const cleanMyAvatar = sanitizeAvatarUri(myProfile.avatarUri);
-    const cleanPartnerAvatar = sanitizeAvatarUri(partnerProfile.avatarUri);
+      setMyBirthIso(myProfile.birthDate || null);
+      setPartnerBirthIso(partnerProfile.birthDate || null);
+      setMyAvatarUri(cleanMyAvatar);
+      setPartnerAvatarUri(cleanPartnerAvatar);
 
-    setMyBirthIso(myProfile.birthDate || null);
-    setPartnerBirthIso(partnerProfile.birthDate || null);
-    setMyAvatarUri(cleanMyAvatar);
-    setPartnerAvatarUri(cleanPartnerAvatar);
+      if (currentUserId) {
+        // Đảm bảo partnerKey KHÔNG BAO GIỜ trùng với currentUserId
+        const safePartnerKey =
+          partnerProfile.userId && String(partnerProfile.userId) !== String(currentUserId)
+            ? partnerProfile.userId
+            : `partner_of_${currentUserId}`;
 
-    if (currentUserId) {
-      // Đảm bảo partnerKey KHÔNG BAO GIỜ trùng với currentUserId
-      const safePartnerKey =
-        partnerProfile.userId && String(partnerProfile.userId) !== String(currentUserId)
-          ? partnerProfile.userId
-          : `partner_of_${currentUserId}`;
+        void readProfileBackup(backupKey).then((backup) => {
+          if (!backup?.membersById || isDirtyRef.current) return;
+          const myBackup = backup.membersById[currentUserId];
+          const partnerBackup = backup.membersById[safePartnerKey];
 
-      void readProfileBackup(backupKey).then((backup) => {
-        if (!backup?.membersById || isDirtyRef.current) return;
-        const myBackup = backup.membersById[currentUserId];
-        const partnerBackup = backup.membersById[safePartnerKey];
-
-        if (myBackup) {
-          setMyBirthIso((cur) => cur || myBackup.birthDate || null);
-          setMyAvatarUri((cur) => cur || sanitizeAvatarUri(myBackup.avatarUri));
-        }
-        if (partnerBackup) {
-          // Không lấy backup của partner nếu nó bị trùng y hệt avatar của mình do lỗi cũ
-          const backupPartnerAvatar = sanitizeAvatarUri(partnerBackup.avatarUri);
-          const isClonedFromMe =
-            backupPartnerAvatar &&
-            (backupPartnerAvatar === cleanMyAvatar || backupPartnerAvatar === myBackup?.avatarUri);
-
-          setPartnerBirthIso((cur) => cur || partnerBackup.birthDate || null);
-          if (!isClonedFromMe) {
-            setPartnerAvatarUri((cur) => cur || backupPartnerAvatar);
+          if (myBackup) {
+            setMyBirthIso((cur) => cur || myBackup.birthDate || null);
+            setMyAvatarUri((cur) => cur || sanitizeAvatarUri(myBackup.avatarUri));
           }
-        }
-      });
-    }
+          if (partnerBackup) {
+            // Không lấy backup của partner nếu nó bị trùng y hệt avatar của mình do lỗi cũ
+            const backupPartnerAvatar = sanitizeAvatarUri(partnerBackup.avatarUri);
+            const isClonedFromMe =
+              backupPartnerAvatar &&
+              (backupPartnerAvatar === cleanMyAvatar || backupPartnerAvatar === myBackup?.avatarUri);
 
-    setFavDrink(myPrivateNote.favDrink);
-    setShoeClothSize(myPrivateNote.shoeClothSize);
-    setHowToComfort(myPrivateNote.howToComfort);
-    setSecretNote(myPrivateNote.secretNote || '');
-  }
-  prevVisibleRef.current = visible;
-}, [visible, backupKey, currentUserId, myProfile, partnerProfile, myPrivateNote]);
+            setPartnerBirthIso((cur) => cur || partnerBackup.birthDate || null);
+            if (!isClonedFromMe) {
+              setPartnerAvatarUri((cur) => cur || backupPartnerAvatar);
+            }
+          }
+        });
+      }
+
+      setFavDrink(myPrivateNote.favDrink);
+      setShoeClothSize(myPrivateNote.shoeClothSize);
+      setHowToComfort(myPrivateNote.howToComfort);
+      setSecretNote(myPrivateNote.secretNote || '');
+    }
+    prevVisibleRef.current = visible;
+  }, [visible, backupKey, currentUserId, myProfile, partnerProfile, myPrivateNote]);
 
   // Nếu dữ liệu từ Server đồng bộ về sau khi Modal đang mở (và người dùng chưa tự tay sửa gì), tự cập nhật lên UI
   useEffect(() => {
@@ -393,10 +397,13 @@ useEffect(() => {
       isDirtyRef.current = true;
       const asset = res.assets[0];
       const permanentDataUri = await saveAvatarPermanently(asset.uri, asset.base64);
+      if (!permanentDataUri) return; // không có ảnh hợp lệ thì không đổi gì
       if (target === 'ME') {
+        myAvatarChangedRef.current = true;
         setMyAvatarBroken(false);
         setMyAvatarUri(permanentDataUri);
       } else {
+        partnerAvatarChangedRef.current = true;
         setPartnerAvatarBroken(false);
         setPartnerAvatarUri(permanentDataUri);
       }
@@ -493,15 +500,22 @@ useEffect(() => {
     );
   };
 
-  // Lưu toàn bộ thông tin profile & avatar vĩnh viễn theo ID từng thành viên
+  // Lưu thông tin profile. Avatar chỉ được gửi lên server cho người nào vừa được đổi ảnh,
+  // tránh ghi đè avatar của người kia bằng bản cache cũ/null.
   const handleSaveProfile = async () => {
-    const permanentMyAvatar = await saveAvatarPermanently(myAvatarUri);
-    const permanentPartnerAvatar = await saveAvatarPermanently(partnerAvatarUri);
+    const myAvatarChanged = myAvatarChangedRef.current && !!myAvatarUri;
+    const partnerAvatarChanged = partnerAvatarChangedRef.current && !!partnerAvatarUri;
+
+    const permanentMyAvatar = myAvatarChanged
+      ? await saveAvatarPermanently(myAvatarUri)
+      : null;
+    const permanentPartnerAvatar = partnerAvatarChanged
+      ? await saveAvatarPermanently(partnerAvatarUri)
+      : null;
 
     const finalMyBirth = myBirthIso || null;
     const finalPartnerBirth = partnerBirthIso || null;
 
-    // 1. Lưu bản sao dự phòng cục bộ theo ID từng người
     // 1. Lưu bản sao dự phòng cục bộ theo ID từng người
     if (currentUserId) {
       const safePartnerKey =
@@ -510,38 +524,48 @@ useEffect(() => {
           : `partner_of_${currentUserId}`;
 
       const existingBackup = await readProfileBackup(backupKey);
+      const prevMy = existingBackup?.membersById?.[currentUserId];
+      const prevPartner = existingBackup?.membersById?.[safePartnerKey];
+
       await writeProfileBackup(backupKey, {
         membersById: {
           ...(existingBackup?.membersById || {}),
           [currentUserId]: {
             nickname: myNick.trim() || 'Bạn',
             birthDate: finalMyBirth,
-            avatarUri: permanentMyAvatar,
+            // Không bao giờ ghi null đè lên avatar đã có trong backup
+            avatarUri: permanentMyAvatar ?? sanitizeAvatarUri(myAvatarUri) ?? prevMy?.avatarUri ?? null,
           },
           [safePartnerKey]: {
             nickname: partnerNick.trim() || 'Người ấy',
             birthDate: finalPartnerBirth,
-            avatarUri: permanentPartnerAvatar,
+            avatarUri:
+              permanentPartnerAvatar ?? sanitizeAvatarUri(partnerAvatarUri) ?? prevPartner?.avatarUri ?? null,
           },
         },
       });
     }
 
-    // 2. Cập nhật Store đồng thời cả Tên, Ngày sinh và Avatar vĩnh viễn
-    await updateProfiles(
-      {
-        nickname: myNick.trim() || 'Bạn',
-        birthDate: finalMyBirth,
-        moodEmoji: myMood,
-        avatarUri: permanentMyAvatar,
-        lastActiveAt: 'Đang hoạt động',
-      },
-      {
-        nickname: partnerNick.trim() || 'Người ấy',
-        birthDate: finalPartnerBirth,
-        avatarUri: permanentPartnerAvatar,
-      },
-    );
+    // 2. Cập nhật Store: chỉ kèm avatarUri khi avatar đó thực sự vừa được đổi
+    const myPatch: Partial<PersonProfile> = {
+      nickname: myNick.trim() || 'Bạn',
+      birthDate: finalMyBirth,
+      moodEmoji: myMood,
+      lastActiveAt: 'Đang hoạt động',
+    };
+    if (permanentMyAvatar) {
+      myPatch.avatarUri = permanentMyAvatar;
+    }
+
+    const partnerPatch: Partial<PersonProfile> = {
+      nickname: partnerNick.trim() || 'Người ấy',
+      birthDate: finalPartnerBirth,
+    };
+    if (permanentPartnerAvatar) {
+      partnerPatch.avatarUri = permanentPartnerAvatar;
+    }
+
+    await updateProfiles(myPatch, partnerPatch);
 
     // 3. Cập nhật Ghi chú riêng
     await updateMyPrivateNote({
@@ -552,6 +576,8 @@ useEffect(() => {
     });
 
     isDirtyRef.current = false;
+    myAvatarChangedRef.current = false;
+    partnerAvatarChangedRef.current = false;
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     onClose();
   };
@@ -664,10 +690,8 @@ useEffect(() => {
                             source={{ uri: myAvatarUri }}
                             style={{ width: 40, height: 40 }}
                             resizeMode="cover"
-                            onError={() => {
-                              setMyAvatarBroken(true);
-                              setMyAvatarUri(null);
-                            }}
+                            // Chỉ ẩn ảnh lỗi trên UI, KHÔNG xóa state để tránh ghi null lên server
+                            onError={() => setMyAvatarBroken(true)}
                           />
                         ) : (
                           <Text style={{ fontSize: 18 }}>{myMood || '😊'}</Text>
@@ -741,10 +765,8 @@ useEffect(() => {
                             source={{ uri: partnerAvatarUri }}
                             style={{ width: 40, height: 40 }}
                             resizeMode="cover"
-                            onError={() => {
-                              setPartnerAvatarBroken(true);
-                              setPartnerAvatarUri(null);
-                            }}
+                            // Chỉ ẩn ảnh lỗi trên UI, KHÔNG xóa state để tránh ghi null lên server
+                            onError={() => setPartnerAvatarBroken(true)}
                           />
                         ) : (
                           <Text style={{ fontSize: 18 }}>{partnerProfile.moodEmoji || '🥰'}</Text>

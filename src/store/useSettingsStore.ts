@@ -13,6 +13,9 @@ export interface PersonProfile {
   userId?: string | null;
   nickname: string;
   avatarUri: string | null;
+  // Thời điểm avatar được ĐỔI lần cuối. Avatar có "cổng" timestamp riêng, độc lập với updatedAt của cả hồ sơ,
+  // để việc sửa biệt danh/ngày sinh không kéo avatar cũ đè lên avatar mới.
+  avatarUpdatedAt?: string | null;
   birthDate: string | null;
   moodEmoji: string;
   customStatusText: string;
@@ -235,9 +238,9 @@ function sanitizeRemoteRoomPayload(remote: any) {
     for (const [uid, prof] of Object.entries(rawMap)) {
       if (isPlaceholderUid(uid)) continue;
       if (prof && typeof prof === 'object') {
-        const { avatarUri, ...rest } = prof as any;
+        const { avatarUri, avatarUpdatedAt, ...rest } = prof as any;
         cleanMembers[uid] = isSyncableMediaUri(avatarUri)
-          ? { ...rest, avatarUri, userId: uid }
+          ? { ...rest, avatarUri, avatarUpdatedAt: avatarUpdatedAt ?? null, userId: uid }
           : { ...rest, userId: uid };
       }
     }
@@ -252,6 +255,7 @@ const DEFAULT_MY_PROFILE: PersonProfile = {
   userId: null,
   nickname: 'Bạn',
   avatarUri: null,
+  avatarUpdatedAt: null,
   birthDate: null,
   moodEmoji: '😊',
   customStatusText: 'Đang nghĩ về người ấy',
@@ -263,6 +267,7 @@ const DEFAULT_PARTNER_PROFILE: PersonProfile = {
   userId: null,
   nickname: 'Người ấy',
   avatarUri: null,
+  avatarUpdatedAt: null,
   birthDate: null,
   moodEmoji: '🥰',
   customStatusText: 'Trực tuyến',
@@ -354,6 +359,8 @@ const DEFAULT_SOCIAL_PREFS: SocialMessengerPrefs = {
 // - Mặc định ưu tiên incoming (từ Server/Update), fallback chỉ dùng khi incoming bị null/rỗng.
 // - NHƯNG nếu fallback (bản local) có `updatedAt` MỚI HƠN incoming thì bản local thắng,
 //   để thay đổi vừa nhập không bị dữ liệu cũ từ server đè lại.
+// - RIÊNG AVATAR: chọn theo `avatarUpdatedAt` mới nhất trong (incoming, base, fallback),
+//   không phụ thuộc updatedAt của cả hồ sơ. Nếu hòa hoặc thiếu timestamp thì giữ thứ tự ưu tiên cũ.
 function mergeProfilePreservingData(
   base: PersonProfile,
   incoming?: Partial<PersonProfile> | null,
@@ -382,17 +389,25 @@ function mergeProfilePreservingData(
         ? fbNick!
         : incomingNick || baseNick || fbNick || base.nickname;
 
+  // Chọn avatar theo avatarUpdatedAt mới nhất (chỉ xét ứng viên có avatar hợp lệ)
+  let bestAvatar: { uri: string; ts: number; at: string | null } | null = null;
+  for (const p of [inc, base, fb]) {
+    const uri = cleanAvatarUri(p?.avatarUri);
+    if (!uri) continue;
+    const ts = parseTs(p?.avatarUpdatedAt);
+    if (!bestAvatar || ts > bestAvatar.ts) {
+      bestAvatar = { uri, ts, at: p?.avatarUpdatedAt || null };
+    }
+  }
+
   return {
     ...base,
     ...fb,
     ...inc,
     nickname: finalNickname,
     birthDate: inc.birthDate || base.birthDate || fb.birthDate || null,
-    avatarUri:
-      cleanAvatarUri(inc.avatarUri) ||
-      cleanAvatarUri(base.avatarUri) ||
-      cleanAvatarUri(fb.avatarUri) ||
-      null,
+    avatarUri: bestAvatar ? bestAvatar.uri : null,
+    avatarUpdatedAt: bestAvatar ? bestAvatar.at : null,
     moodEmoji: inc.moodEmoji || base.moodEmoji || fb.moodEmoji || '😊',
     customStatusText:
       inc.customStatusText || base.customStatusText || fb.customStatusText || 'Trực tuyến',
@@ -613,7 +628,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
             profiles: serverMembers,
           },
         })
-        .catch(() => null);
+        .catch((err) => {
+          // Không nuốt lỗi im lặng nữa: 413 (body quá lớn), 401, mất mạng... đều hiện ở đây
+          console.warn(
+            '[settings] Đồng bộ shared-settings thất bại:',
+            err?.response?.status || err?.message || err,
+          );
+        });
     }
   };
 
@@ -1004,8 +1025,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           existingPartner.nickname === myFinalProfile.nickname &&
           trimmedPartnerName !== myFinalProfile.nickname;
 
+        // Chỉ coi avatar là "clone lỗi cũ" khi dữ liệu partner KHÔNG có avatarUpdatedAt (dữ liệu từ phiên bản cũ).
+        // Avatar đã có avatarUpdatedAt là do người dùng chủ động đặt nên được tin tưởng, kể cả khi trùng ảnh với mình.
         const isClonedAvatar =
           Boolean(existingPartner.avatarUri) &&
+          !existingPartner.avatarUpdatedAt &&
           existingPartner.avatarUri === myFinalProfile.avatarUri &&
           existingPartner.avatarUri !== cleanPartnerAvatarFromAuth;
 
@@ -1028,6 +1052,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
               cleanAvatarUri(stashedPartnerData.avatarUri) ||
               cleanPartnerAvatarFromAuth ||
               null,
+          avatarUpdatedAt: isClonedAvatar ? null : existingPartner.avatarUpdatedAt || null,
           birthDate: isClonedBirth
             ? null
             : existingPartner.birthDate || stashedPartnerData.birthDate || null,
@@ -1173,6 +1198,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       try {
         let resolvedPartnerUid = '';
 
+        // Avatar chỉ được coi là "đổi" khi patch có ảnh hợp lệ VÀ khác ảnh hiện tại.
+        // Patch không có avatarUri (undefined) hoặc null/rỗng => giữ nguyên avatar cũ, không bao giờ xóa.
+        const avatarChanged = (before: PersonProfile, patch?: Partial<PersonProfile>): boolean => {
+          if (!patch || patch.avatarUri === undefined) return false;
+          const cleaned = cleanAvatarUri(patch.avatarUri);
+          return Boolean(cleaned) && cleaned !== cleanAvatarUri(before.avatarUri);
+        };
+
+        const resolveNextAvatar = (
+          before: PersonProfile,
+          patch?: Partial<PersonProfile>,
+        ): string | null => {
+          const cleaned =
+            patch && patch.avatarUri !== undefined ? cleanAvatarUri(patch.avatarUri) : null;
+          return cleaned || cleanAvatarUri(before.avatarUri);
+        };
+
         // Chỉ đóng dấu updatedAt khi nội dung hồ sơ THỰC SỰ thay đổi.
         // Nếu không, mỗi lần bấm "Lưu" sẽ đóng dấu mới lên hồ sơ người kia và đè mất chỉnh sửa của họ.
         const hasProfileChange = (
@@ -1180,15 +1222,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           patch?: Partial<PersonProfile>,
         ): boolean => {
           if (!patch) return false;
-          const nextAvatar =
-            patch.avatarUri !== undefined ? cleanAvatarUri(patch.avatarUri) : before.avatarUri;
           return (
             (patch.nickname !== undefined && patch.nickname !== before.nickname) ||
             (patch.birthDate !== undefined && (patch.birthDate || null) !== (before.birthDate || null)) ||
             (patch.moodEmoji !== undefined && patch.moodEmoji !== before.moodEmoji) ||
             (patch.customStatusText !== undefined &&
               patch.customStatusText !== before.customStatusText) ||
-            (nextAvatar || null) !== (cleanAvatarUri(before.avatarUri) || null)
+            avatarChanged(before, patch)
           );
         };
 
@@ -1223,16 +1263,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
           const myChanged = hasProfileChange(state.myProfile, myPatch);
           const partnerChanged = hasProfileChange(state.partnerProfile, partnerPatch);
+          const myAvatarChanged = avatarChanged(state.myProfile, myPatch);
+          const partnerAvatarChanged = avatarChanged(state.partnerProfile, partnerPatch);
 
           const updatedMy: PersonProfile = myPatch
             ? {
                 ...baseMy,
                 ...state.myProfile,
                 ...myPatch,
-                avatarUri:
-                  myPatch.avatarUri !== undefined
-                    ? cleanAvatarUri(myPatch.avatarUri)
-                    : cleanAvatarUri(state.myProfile.avatarUri),
+                avatarUri: resolveNextAvatar(state.myProfile, myPatch),
+                avatarUpdatedAt: myAvatarChanged
+                  ? nowIso
+                  : state.myProfile.avatarUpdatedAt || null,
                 userId: myUid,
                 updatedAt: myChanged ? nowIso : state.myProfile.updatedAt || null,
               }
@@ -1248,10 +1290,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
                 ...basePartner,
                 ...state.partnerProfile,
                 ...partnerPatch,
-                avatarUri:
-                  partnerPatch.avatarUri !== undefined
-                    ? cleanAvatarUri(partnerPatch.avatarUri)
-                    : cleanAvatarUri(state.partnerProfile.avatarUri),
+                avatarUri: resolveNextAvatar(state.partnerProfile, partnerPatch),
+                avatarUpdatedAt: partnerAvatarChanged
+                  ? nowIso
+                  : state.partnerProfile.avatarUpdatedAt || null,
                 userId: existingPartnerUid,
                 updatedAt: partnerChanged ? nowIso : state.partnerProfile.updatedAt || null,
               }
@@ -1290,6 +1332,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         await persistSharedRoomState(false);
 
         // Upload ảnh đại diện của BẢN THÂN lên Cloud nếu chưa phải link http(s)
+        // (avatarUpdatedAt giữ nguyên khi đổi từ base64 sang link cloud, vì vẫn là CÙNG một ảnh)
         const pickedMyAvatar = cleanAvatarUri(myPatch?.avatarUri);
         if (pickedMyAvatar && !isCloudHttpUrl(pickedMyAvatar)) {
           try {
