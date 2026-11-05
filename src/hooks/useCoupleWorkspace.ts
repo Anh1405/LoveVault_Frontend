@@ -10,6 +10,7 @@ import {
   uploadMediaToCloudAndSaveDb,
   deleteCloudMediaById,
   fetchFullCoupleRoomFromCloud,
+  fetchCloudWorkspaceMedia,
   pushCoupleRoomSnapshotToCloud,
   flushPendingRoomSnapshot,
   flushPendingCloudMediaQueue,
@@ -1191,7 +1192,13 @@ export function useCoupleWorkspace() {
   const goalsRef = useRef<CoupleGoalItem[]>([]);
   goalsRef.current = goals;
 
-  const recentAiBodiesRef = useRef<Map<string, string[]>>(new Map());
+  const mediaListRef = useRef<CoupleMediaItem[]>([]);
+  mediaListRef.current = mediaList;
+
+  const locketSnapsRef = useRef<LocketSnapItem[]>([]);
+  locketSnapsRef.current = locketSnaps;
+
+  const recentAiBodiesRef = useRef>(new Map());
 
   const [qaFilter, setQaFilter] = useState<QuestionCategory>('ALL');
   const [qaHistory, setQaHistory] = useState<DailyQAItem[]>([]);
@@ -1559,8 +1566,95 @@ export function useCoupleWorkspace() {
           await storage.setItem(workspaceKeys.QA_HISTORY, JSON.stringify(mergedHistory));
         }
       }
+
+      // 5. Hợp nhất Album Media & Locket Snaps từ Cloud
+      try {
+        const mediaWorkspace = await fetchCloudWorkspaceMedia(150).catch(() => null);
+        const rawCloudAlbums =
+          mediaWorkspace?.albumMedia || cloudSnapshot.albumMedia || [];
+        const rawCloudLockets =
+          mediaWorkspace?.locketSnaps || cloudSnapshot.locketSnaps || [];
+
+        // Lọc bỏ các bản ghi Avatar / Hero Wallpaper / thumbnail cũ từng bị lưu nhầm vào ALBUM_MEDIA trước đây
+        const cleanCloudAlbums = rawCloudAlbums.filter(
+          (m) =>
+            m.caption !== 'Hero Wallpaper' &&
+            m.caption !== 'Avatar' &&
+            m.caption !== 'thumbnail',
+        );
+
+        if (cleanCloudAlbums.length > 0) {
+          const cloudMediaIds = new Set(cleanCloudAlbums.map((m) => m.id));
+          const unsyncedLocalMedia = mediaListRef.current.filter(
+            (loc) => loc.syncStatus === 'PENDING_SYNC' && !cloudMediaIds.has(loc.id),
+          );
+
+          const mappedCloudMedia: CoupleMediaItem[] = cleanCloudAlbums.map((m) => ({
+            id: m.id,
+            uri: m.remoteUrl,
+            remoteUrl: m.remoteUrl,
+            thumbnailUri: m.thumbnailUrl ?? null,
+            mediaType: m.mediaType,
+            caption: m.caption || 'Kỷ niệm chung',
+            durationSec: m.durationSec ?? 0,
+            uploaderId: m.uploaderId,
+            createdAt:
+              (m.createdAt || '').split('T')[0] ||
+              new Date().toISOString().split('T')[0],
+            syncStatus: 'SYNCED' as SyncStatus,
+          }));
+
+          const mergedMedia = [...unsyncedLocalMedia, ...mappedCloudMedia];
+          if (!sameJson(mergedMedia, mediaListRef.current)) {
+            setMediaList(mergedMedia);
+            await storage.setItem(workspaceKeys.MEDIA, JSON.stringify(mergedMedia));
+          }
+        }
+
+        if (rawCloudLockets.length > 0) {
+          const cloudLocketIds = new Set(rawCloudLockets.map((s) => s.id));
+          const unsyncedLocalLockets = locketSnapsRef.current.filter(
+            (loc) => !loc.remoteUrl && !cloudLocketIds.has(loc.id),
+          );
+
+          const mappedCloudLockets: LocketSnapItem[] = rawCloudLockets.map((s) => {
+            const isMineSnap = String(s.uploaderId) === String(currentUserId);
+            const dt = s.createdAt ? new Date(s.createdAt) : new Date();
+            const timeStr = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')} • ${dt.toISOString().split('T')[0]}`;
+            return {
+              id: s.id,
+              uri: s.remoteUrl,
+              remoteUrl: s.remoteUrl,
+              ownerId: s.uploaderId,
+              senderId: s.uploaderId,
+              senderName: isMineSnap ? myProfile.nickname : partnerProfile.nickname,
+              isMine: isMineSnap,
+              stampBadge: s.stamp || '💕 Đang nhớ đằng ấy',
+              caption: s.caption || 'Khoảnh khắc Locket',
+              createdAtTime: timeStr,
+              reactions: Array.isArray(s.reactions)
+                ? s.reactions.map((r: any) => (typeof r === 'string' ? r : r.emoji || '❤️'))
+                : ['❤️'],
+            };
+          });
+
+          const mergedLockets = [...unsyncedLocalLockets, ...mappedCloudLockets];
+          if (!sameJson(mergedLockets, locketSnapsRef.current)) {
+            setLocketSnaps(mergedLockets);
+            await storage.setItem(workspaceKeys.LOCKET, JSON.stringify(mergedLockets));
+          }
+        }
+      } catch {
+        // Bỏ qua nếu offline, giữ nguyên cache local
+      }
     },
-    [coupleId, workspaceKeys],
+    [
+      coupleId,
+      workspaceKeys,
+      currentUserId,
+      myProfile.nickname,
+      partnerProfile.nickname,
+    ],
   );
 
   // Khởi tạo dữ liệu từ bộ nhớ máy trước (Offline-first), sau đó tự động tải từ Cloud Database về
@@ -2581,29 +2675,29 @@ export function useCoupleWorkspace() {
   );
 
   const pickAndSaveMedia = useCallback(
-  async (type: 'VIDEO' | 'IMAGE') => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert(
-        'Quyền truy cập bị từ chối',
-        'Hãy cấp quyền Thư viện ảnh/video trong Cài đặt để lưu giữ kỷ niệm chung.',
-        [
-          { text: 'Đóng', style: 'cancel' },
-          { text: 'Mở Cài đặt', onPress: () => Linking.openSettings() },
-        ],
-      );
-      return;
-    }
+    async (type: 'VIDEO' | 'IMAGE') => {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(
+          'Quyền truy cập bị từ chối',
+          'Hãy cấp quyền Thư viện ảnh/video trong Cài đặt để lưu giữ kỷ niệm chung.',
+          [
+            { text: 'Đóng', style: 'cancel' },
+            { text: 'Mở Cài đặt', onPress: () => Linking.openSettings() },
+          ],
+        );
+        return;
+      }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: type === 'VIDEO' ? ['videos'] : ['images'],
-      allowsEditing: false,
-      quality: socialPrefs.hdMediaUpload ? 0.92 : 0.75,
-    });
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: type === 'VIDEO' ? ['videos'] : ['images'],
+        allowsEditing: false,
+        quality: socialPrefs.hdMediaUpload ? 0.92 : 0.75,
+      });
 
-    if (result.canceled || !result.assets?.[0]) return;
-    const asset = result.assets[0];
-    // --- BẮT ĐẦU KIỂM TRA GIỚI HẠN VIDEO 200MB ---
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      // --- BẮT ĐẦU KIỂM TRA GIỚI HẠN VIDEO 200MB ---
       const MAX_VIDEO_BYTES = 200 * 1024 * 1024; // 200MB
       if (type === 'VIDEO') {
         let videoSize = asset.fileSize ?? 0;
@@ -2626,66 +2720,66 @@ export function useCoupleWorkspace() {
         }
       }
       // --- KẾT THÚC KIỂM TRA GIỚI HẠN VIDEO 200MB ---
-    setUploadingMedia(true);
+      setUploadingMedia(true);
 
-    try {
-      const todayIso = new Date().toISOString().split('T')[0];
-      const itemId = `media_${Date.now()}`;
-      const captionText = `${type === 'VIDEO' ? 'Thước phim' : 'Bức ảnh'} ngày ${todayIso}`;
-      
-      // Trích xuất durationSec từ asset.duration (mili-giây -> giây)
-      const durationSec = asset.duration ? Math.round(asset.duration / 1000) : 0;
-      
-      let remoteUrl: string | null = null;
-      let thumbnailUri: string | null = null;
-      let finalDuration = durationSec;
-      let finalId = itemId;
-      let syncStatus: SyncStatus = 'PENDING_SYNC';
-
-      // Tải luồng nhị phân lên Cloud và lưu DB (cloudMediaService tự xử lý thumbnail đệ quy)
       try {
-        const cloudRecord = await uploadMediaToCloudAndSaveDb({
-          localUri: asset.uri,
-          category: 'ALBUM_MEDIA',
+        const todayIso = new Date().toISOString().split('T')[0];
+        const itemId = `media_${Date.now()}`;
+        const captionText = `${type === 'VIDEO' ? 'Thước phim' : 'Bức ảnh'} ngày ${todayIso}`;
+
+        // Trích xuất durationSec từ asset.duration (mili-giây -> giây)
+        const durationSec = asset.duration ? Math.round(asset.duration / 1000) : 0;
+
+        let remoteUrl: string | null = null;
+        let thumbnailUri: string | null = null;
+        let finalDuration = durationSec;
+        let finalId = itemId;
+        let syncStatus: SyncStatus = 'PENDING_SYNC';
+
+        // Tải luồng nhị phân lên Cloud và lưu DB (cloudMediaService tự xử lý thumbnail đệ quy)
+        try {
+          const cloudRecord = await uploadMediaToCloudAndSaveDb({
+            localUri: asset.uri,
+            category: 'ALBUM_MEDIA',
+            mediaType: type,
+            caption: captionText,
+            durationSec,
+            idempotencyKey: itemId,
+          });
+          remoteUrl = cloudRecord.remoteUrl;
+          thumbnailUri = cloudRecord.thumbnailUrl ?? null;
+          finalDuration = cloudRecord.durationSec ?? durationSec;
+          finalId = cloudRecord.id || itemId;
+          syncStatus = 'SYNCED';
+        } catch {
+          syncStatus = 'PENDING_SYNC';
+        }
+
+        const newMedia: CoupleMediaItem = {
+          id: finalId,
+          uri: remoteUrl || asset.uri,
+          remoteUrl,
+          thumbnailUri,
           mediaType: type,
           caption: captionText,
-          durationSec,
-          idempotencyKey: itemId,
+          durationSec: finalDuration,
+          uploaderId: currentUserId,
+          createdAt: todayIso,
+          syncStatus,
+        };
+
+        setMediaList((prev) => {
+          const next = [newMedia, ...prev];
+          storage.setItem(workspaceKeys.MEDIA, JSON.stringify(next)).catch(() => null);
+          return next;
         });
-        remoteUrl = cloudRecord.remoteUrl;
-        thumbnailUri = cloudRecord.thumbnailUrl ?? null;
-        finalDuration = cloudRecord.durationSec ?? durationSec;
-        finalId = cloudRecord.id || itemId;
-        syncStatus = 'SYNCED';
-      } catch {
-        syncStatus = 'PENDING_SYNC';
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } finally {
+        setUploadingMedia(false);
       }
-
-      const newMedia: CoupleMediaItem = {
-        id: finalId,
-        uri: remoteUrl || asset.uri,
-        remoteUrl,
-        thumbnailUri,
-        mediaType: type,
-        caption: captionText,
-        durationSec: finalDuration,
-        uploaderId: currentUserId,
-        createdAt: todayIso,
-        syncStatus,
-      };
-
-      setMediaList((prev) => {
-        const next = [newMedia, ...prev];
-        storage.setItem(workspaceKeys.MEDIA, JSON.stringify(next)).catch(() => null);
-        return next;
-      });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } finally {
-      setUploadingMedia(false);
-    }
-  },
-  [currentUserId, socialPrefs.hdMediaUpload, workspaceKeys.MEDIA],
-);
+    },
+    [currentUserId, socialPrefs.hdMediaUpload, workspaceKeys.MEDIA],
+  );
 
   const deleteMedia = useCallback(
     async (mediaId: string) => {
@@ -2703,7 +2797,29 @@ export function useCoupleWorkspace() {
     setSyncingQueue(true);
     try {
       await runDailyAutoAiRefresh();
-      await flushPendingCloudMediaQueue().catch(() => null);
+
+      const flushedMedia = await flushPendingCloudMediaQueue().catch(() => []);
+      if (flushedMedia.length > 0) {
+        setMediaList((prev) => {
+          const next = prev.map((item) => {
+            if (item.syncStatus === 'SYNCED') return item;
+            const matched = flushedMedia.find(
+              (f) => f.id === item.id || f.caption === item.caption,
+            );
+            if (!matched) return item;
+            return {
+              ...item,
+              id: matched.id,
+              uri: matched.remoteUrl,
+              remoteUrl: matched.remoteUrl,
+              thumbnailUri: matched.thumbnailUrl ?? item.thumbnailUri,
+              syncStatus: 'SYNCED' as SyncStatus,
+            };
+          });
+          storage.setItem(workspaceKeys.MEDIA, JSON.stringify(next)).catch(() => null);
+          return next;
+        });
+      }
 
       const updatedEvents = await Promise.all(
         events.map(async (ev) => {
@@ -2754,6 +2870,7 @@ export function useCoupleWorkspace() {
     runDailyAutoAiRefresh,
     workspaceKeys.EVENTS,
     workspaceKeys.GOALS,
+    workspaceKeys.MEDIA,
     pullAndMergeCloudWorkspace,
   ]);
 
