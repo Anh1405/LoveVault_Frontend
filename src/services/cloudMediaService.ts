@@ -67,7 +67,7 @@ export interface CoupleRoomCloudSnapshot {
   sharedSettings?: Record<string, any> | null;
   updatedAt?: string;
 }
-
+const MAX_VIDEO_SIZE_BYTES = 200 * 1024 * 1024;
 const PENDING_MEDIA_SYNC_KEY = 'lovevault_pending_cloud_media_queue_v1';
 const PENDING_WORKSPACE_SNAPSHOT_KEY = 'lovevault_pending_workspace_snapshot_v1';
 const MAX_RETRY_ATTEMPTS = 3;
@@ -234,6 +234,20 @@ export const uploadMediaToCloudAndSaveDb = async (
 
   // 1. Nếu là VIDEO: tạo thumbnail (web dùng canvas, native dùng expo-video-thumbnails) rồi upload trước
   if (input.mediaType === 'VIDEO') {
+    // --- BẮT ĐẦU ĐOẠN KIỂM TRA 200MB ---
+    if (Platform.OS === 'web' || uploadUri.startsWith('blob:') || uploadUri.startsWith('data:')) {
+      const res = await fetch(uploadUri);
+      const blob = await res.blob();
+      if (blob.size > MAX_VIDEO_SIZE_BYTES) {
+        throw new Error('VIDEO_TOO_LARGE: Video vượt quá giới hạn 200MB. Vui lòng chọn video ngắn hoặc nhẹ hơn.');
+      }
+    } else {
+      const fileInfo = await FileSystem.getInfoAsync(uploadUri);
+      if (fileInfo.exists && typeof fileInfo.size === 'number' && fileInfo.size > MAX_VIDEO_SIZE_BYTES) {
+        throw new Error('VIDEO_TOO_LARGE: Video vượt quá giới hạn 200MB. Vui lòng chọn video ngắn hoặc nhẹ hơn.');
+      }
+    }
+    // --- KẾT THÚC ĐOẠN KIỂM TRA 200MB ---
     try {
       let thumbLocalUri: string | null = null;
 
@@ -266,18 +280,22 @@ export const uploadMediaToCloudAndSaveDb = async (
   }
 
   // 2. Nếu là IMAGE: Nén giảm kích thước ảnh xuống tối đa 1920px để tối ưu dung lượng
+  const isHeroWallpaper = input.caption === 'Hero Wallpaper';
   if (
-      input.mediaType === 'IMAGE' &&
-      Platform.OS !== 'web' &&
-      !uploadUri.startsWith('http') &&
-      !uploadUri.startsWith('blob:') &&
-      !uploadUri.startsWith('data:')
+    input.mediaType === 'IMAGE' &&
+    Platform.OS !== 'web' &&
+    !uploadUri.startsWith('http') &&
+    !uploadUri.startsWith('blob:') &&
+    !uploadUri.startsWith('data:')
   ) {
     try {
       const manipResult = await ImageManipulator.manipulateAsync(
-          uploadUri,
-          [{ resize: { width: 1920 } }],
-          { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+        uploadUri,
+        [], // Không ép resize cứng 1920px để tránh kéo giãn làm vỡ ảnh
+        {
+          compress: isHeroWallpaper ? 0.95 : 0.88,
+          format: ImageManipulator.SaveFormat.JPEG,
+        },
       );
       uploadUri = manipResult.uri;
     } catch (e) {
@@ -370,7 +388,10 @@ export const uploadMediaToCloudAndSaveDb = async (
 
   // Nếu rớt mạng hoàn toàn sau 3 lần thử, đẩy vào hàng đợi Offline để đồng bộ bù sau.
   // Bọc try/catch: nếu hàng đợi lỗi (ví dụ localStorage đầy do chuỗi Base64) vẫn phải ném đúng lỗi gốc.
-  if (!input.skipOfflineQueue) {
+  const isTooLargeError =
+    lastError instanceof Error && lastError.message.includes('VIDEO_TOO_LARGE');
+
+  if (!input.skipOfflineQueue && !isTooLargeError) {
     try {
       await enqueuePendingMediaUpload({ ...input, idempotencyKey });
     } catch (queueError) {

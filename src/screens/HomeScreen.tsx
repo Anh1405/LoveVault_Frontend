@@ -30,14 +30,12 @@ import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/dat
 import { useVideoPlayer, VideoView } from 'expo-video';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
-import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library/legacy';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { storage } from '../services/storage';
 import {
-  uploadMediaToCloudAndSaveDb,
   flushPendingCloudMediaQueue,
   fetchCloudWorkspaceMedia,
   deleteCloudMediaById,
@@ -70,6 +68,10 @@ import {
 
 type DashboardSection = 'EVENTS' | 'GOALS' | 'DAILY_QA' | 'MEDIA';
 
+export type AlbumMediaWithCategory = CoupleMediaItem & {
+  albumCategory?: string;
+};
+
 const toLocalIsoDate = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
     date.getDate(),
@@ -77,6 +79,12 @@ const toLocalIsoDate = (date: Date) =>
 
 const getAnniversaryCacheKey = (coupleId?: string | null, userId?: string | null) =>
   `lovevault_anniversary_override_v2_${coupleId || userId || 'guest'}`;
+
+const ALBUM_CATEGORIES_STORAGE_KEY = (coupleId?: string | null, userId?: string | null) =>
+  `lovevault_album_categories_v1_${coupleId || userId || 'guest'}`;
+
+const ALBUM_ITEM_CATEGORY_MAP_KEY = (coupleId?: string | null, userId?: string | null) =>
+  `lovevault_album_item_cat_map_v1_${coupleId || userId || 'guest'}`;
 
 const COUPLE_LOCKET_STAMPS: LocketStampItem[] = [
   { id: '1', icon: '💕', label: 'Đang nhớ đằng ấy' },
@@ -89,6 +97,7 @@ const COUPLE_LOCKET_STAMPS: LocketStampItem[] = [
 
 const PAGE_LABELS = ['Locket', 'Không gian'] as const;
 const PAGE_SWITCH_PADDING = 3;
+const MEDIA_PAGE_SIZE = 12;
 
 const locketSnapKeyExtractor = (snap: { id: string }) => snap.id;
 
@@ -165,9 +174,6 @@ const InlineVideoPlayer: React.FC<{ uri: string }> = ({ uri }) => {
   );
 };
 
-
-const MEDIA_PAGE_SIZE = 12;
-
 const formatDuration = (sec: number): string => {
   const total = Math.max(0, Math.round(sec));
   const m = Math.floor(total / 60);
@@ -180,9 +186,9 @@ const MediaCardItem = React.memo(({
   colors,
   onSelect,
 }: {
-  item: CoupleMediaItem;
+  item: AlbumMediaWithCategory;
   colors: ThemeColors;
-  onSelect: (item: CoupleMediaItem) => void;
+  onSelect: (item: AlbumMediaWithCategory) => void;
 }) => {
   const effectiveUri = item.remoteUrl || item.uri;
   const isVideo = item.mediaType === 'VIDEO';
@@ -224,9 +230,18 @@ const MediaCardItem = React.memo(({
           source={{ uri: displayUri }}
           style={styles.mediaThumbImage}
           contentFit="cover"
+          allowDownscaling={false}
           transition={200}
-          cachePolicy="memory-disk" // Tối ưu cache hình ảnh vào đĩa & bộ nhớ RAM
+          cachePolicy="memory-disk"
         />
+      )}
+
+      {Boolean(item.albumCategory) && (
+        <View style={styles.mediaCategoryBadge} pointerEvents="none">
+          <Text style={styles.mediaCategoryBadgeText} numberOfLines={1}>
+            📁 {item.albumCategory}
+          </Text>
+        </View>
       )}
 
       {isVideo && (
@@ -280,6 +295,16 @@ export const HomeScreen = () => {
     [coupleId, currentUserId],
   );
 
+  const albumCategoriesKey = React.useMemo(
+    () => ALBUM_CATEGORIES_STORAGE_KEY(coupleId, currentUserId),
+    [coupleId, currentUserId],
+  );
+
+  const itemCategoryMapKey = React.useMemo(
+    () => ALBUM_ITEM_CATEGORY_MAP_KEY(coupleId, currentUserId),
+    [coupleId, currentUserId],
+  );
+
   const isMomoFundEnabled = (momoFund as any)?.enabled !== false;
 
   const isDark =
@@ -317,6 +342,107 @@ export const HomeScreen = () => {
     restoreWorkspaceBackup,
   } = useCoupleWorkspace();
 
+  // State quản lý Danh mục Album (Folders)
+  const [albumCategories, setAlbumCategories] = useState<string[]>([
+    'Kỷ niệm hẹn hò',
+    'Du lịch cùng nhau',
+    'Ẩm thực & Trà sữa',
+  ]);
+  const [itemCategoryMap, setItemCategoryMap] = useState<Record<string, string>>({});
+  const [selectedAlbumCategory, setSelectedAlbumCategory] = useState<string>('ALL');
+  const [createCategoryModalVisible, setCreateCategoryModalVisible] = useState(false);
+  const [newCategoryNameInput, setNewCategoryNameInput] = useState('');
+  const pendingTargetCategoryRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    storage.getItem(albumCategoriesKey).then((raw) => {
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setAlbumCategories(parsed);
+        }
+      } catch {}
+    });
+    storage.getItem(itemCategoryMapKey).then((raw) => {
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          setItemCategoryMap(parsed);
+        }
+      } catch {}
+    });
+  }, [albumCategoriesKey, itemCategoryMapKey]);
+
+  const saveAlbumCategoriesList = useCallback(
+    async (nextList: string[]) => {
+      setAlbumCategories(nextList);
+      await storage.setItem(albumCategoriesKey, JSON.stringify(nextList));
+    },
+    [albumCategoriesKey],
+  );
+
+  const assignMediaToCategory = useCallback(
+    async (mediaId: string, categoryName: string, remoteUrl?: string) => {
+      setItemCategoryMap((prev) => {
+        const next = { ...prev };
+        if (!categoryName || categoryName === 'ALL') {
+          delete next[mediaId];
+          if (remoteUrl) delete next[remoteUrl];
+        } else {
+          next[mediaId] = categoryName;
+          if (remoteUrl) next[remoteUrl] = categoryName;
+        }
+        void storage.setItem(itemCategoryMapKey, JSON.stringify(next));
+        return next;
+      });
+    },
+    [itemCategoryMapKey],
+  );
+
+  const handleCreateAlbumCategory = useCallback(async () => {
+    const trimmed = newCategoryNameInput.trim();
+    if (!trimmed) {
+      Alert.alert('Thiếu tên danh mục', 'Vui lòng nhập tên danh mục bạn muốn tạo.');
+      return;
+    }
+    if (albumCategories.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
+      Alert.alert('Đã tồn tại', 'Danh mục này đã có trong Album của bạn.');
+      return;
+    }
+    const next = [...albumCategories, trimmed];
+    await saveAlbumCategoriesList(next);
+    setSelectedAlbumCategory(trimmed);
+    setNewCategoryNameInput('');
+    setCreateCategoryModalVisible(false);
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  }, [newCategoryNameInput, albumCategories, saveAlbumCategoriesList]);
+
+  const handleDeleteAlbumCategory = useCallback(
+    (categoryName: string) => {
+      Alert.alert(
+        'Xóa danh mục',
+        `Bạn muốn xóa danh mục "${categoryName}"? (Các ảnh bên trong sẽ không bị mất mà chuyển về mục Tất cả).`,
+        [
+          { text: 'Hủy', style: 'cancel' },
+          {
+            text: 'Xóa danh mục',
+            style: 'destructive',
+            onPress: async () => {
+              const next = albumCategories.filter((c) => c !== categoryName);
+              await saveAlbumCategoriesList(next);
+              if (selectedAlbumCategory === categoryName) {
+                setSelectedAlbumCategory('ALL');
+              }
+            },
+          },
+        ],
+      );
+    },
+    [albumCategories, selectedAlbumCategory, saveAlbumCategoriesList],
+  );
+
   // Đồng bộ Cloud Object Storage (S3/R2) & PostgreSQL qua useQuery
   const {
     data: cloudMediaPayload,
@@ -332,30 +458,68 @@ export const HomeScreen = () => {
     retry: 2,
   });
 
-  // Gộp dữ liệu từ Cloud Server (PostgreSQL + S3/R2) với dữ liệu Local trên thiết bị
-  const mergedMediaList = React.useMemo<CoupleMediaItem[]>(() => {
-    const cloudItems: CoupleMediaItem[] = (cloudMediaPayload?.albumMedia || [])
-      .filter((m) => m.caption !== 'thumbnail')
-      .map((m) => ({
-      id: m.id,
-      uri: m.remoteUrl,
-      remoteUrl: m.remoteUrl,
-      thumbnailUri: m.thumbnailUrl || undefined,
-      mediaType: m.mediaType,
-      caption: m.caption || 'Kỷ niệm của hai đứa',
-      createdAt: new Date(m.createdAt).toLocaleDateString('vi-VN'),
-      durationSec: m.durationSec ?? undefined,
-    }));
+  // Tự động đồng bộ thêm tên danh mục từ Cloud nếu đối phương có tạo danh mục mới trên trường stamp
+  useEffect(() => {
+    const cloudAlbum = cloudMediaPayload?.albumMedia;
+    if (!Array.isArray(cloudAlbum) || cloudAlbum.length === 0) return;
+    const discoveredCategories = new Set(albumCategories);
+    let hasNew = false;
+    for (const m of cloudAlbum) {
+      if (
+        m.stamp &&
+        m.caption !== 'thumbnail' &&
+        m.caption !== 'Hero Wallpaper' &&
+        !discoveredCategories.has(m.stamp)
+      ) {
+        discoveredCategories.add(m.stamp);
+        hasNew = true;
+      }
+    }
+    if (hasNew) {
+      void saveAlbumCategoriesList(Array.from(discoveredCategories));
+    }
+  }, [cloudMediaPayload?.albumMedia, albumCategories, saveAlbumCategoriesList]);
 
-    if (cloudItems.length === 0) return mediaList;
+  // Gộp dữ liệu từ Cloud Server (PostgreSQL + S3/R2) với dữ liệu Local trên thiết bị
+  // ĐÃ LỌC BỎ 'thumbnail' VÀ 'Hero Wallpaper' ĐỂ ẢNH NỀN KHÔNG BỊ TRỘN VÀO ALBUM
+  const mergedMediaList = React.useMemo<AlbumMediaWithCategory[]>(() => {
+    const cloudItems: AlbumMediaWithCategory[] = (cloudMediaPayload?.albumMedia || [])
+      .filter((m) => m.caption !== 'thumbnail' && m.caption !== 'Hero Wallpaper')
+      .map((m) => ({
+        id: m.id,
+        uri: m.remoteUrl,
+        remoteUrl: m.remoteUrl,
+        thumbnailUri: m.thumbnailUrl || undefined,
+        mediaType: m.mediaType,
+        caption: m.caption || 'Kỷ niệm của hai đứa',
+        createdAt: new Date(m.createdAt).toLocaleDateString('vi-VN'),
+        durationSec: m.durationSec ?? undefined,
+        albumCategory:
+          itemCategoryMap[m.id] ||
+          (m.remoteUrl ? itemCategoryMap[m.remoteUrl] : undefined) ||
+          m.stamp ||
+          undefined,
+      }));
+
+    const validLocalMedia: AlbumMediaWithCategory[] = mediaList
+      .filter((loc) => loc.caption !== 'thumbnail' && loc.caption !== 'Hero Wallpaper')
+      .map((loc) => ({
+        ...loc,
+        albumCategory:
+          itemCategoryMap[loc.id] ||
+          (loc.remoteUrl ? itemCategoryMap[loc.remoteUrl] : undefined) ||
+          (loc as AlbumMediaWithCategory).albumCategory,
+      }));
+
+    if (cloudItems.length === 0) return validLocalMedia;
 
     const seenUrls = new Set(cloudItems.map((i) => i.remoteUrl || i.uri));
     const seenIds = new Set(cloudItems.map((i) => i.id));
-    const localOnly = mediaList.filter(
+    const localOnly = validLocalMedia.filter(
       (loc) => !seenIds.has(loc.id) && !seenUrls.has(loc.remoteUrl || loc.uri),
     );
     return [...cloudItems, ...localOnly];
-  }, [cloudMediaPayload?.albumMedia, mediaList]);
+  }, [cloudMediaPayload?.albumMedia, mediaList, itemCategoryMap]);
 
   const mergedLocketSnaps = React.useMemo<LocketSnapView[]>(() => {
     const cloudSnaps: LocketSnapView[] = (cloudMediaPayload?.locketSnaps || []).map(
@@ -379,9 +543,7 @@ export const HomeScreen = () => {
 
     if (cloudSnaps.length === 0) return locketSnaps;
 
-    const seenUrls = new Set(
-      cloudSnaps.map((i: any) => i.remoteUrl || i.uri),
-    );
+    const seenUrls = new Set(cloudSnaps.map((i: any) => i.remoteUrl || i.uri));
     const seenIds = new Set(cloudSnaps.map((i) => i.id));
     const localOnly = locketSnaps.filter(
       (loc: any) => !seenIds.has(loc.id) && !seenUrls.has(loc.remoteUrl || loc.uri),
@@ -396,7 +558,6 @@ export const HomeScreen = () => {
   ]);
 
   // Lưu bản sao từ Cloud xuống Local Storage để xem ngoại tuyến khi mất mạng
-  // Thay thế dòng 296-306 trong HomeScreen.tsx bằng đoạn kiểm tra an toàn này:
   useEffect(() => {
     if (!cloudMediaPayload || uploadingMedia) return;
     const hasCloudAlbum =
@@ -404,7 +565,6 @@ export const HomeScreen = () => {
     const hasCloudLocket =
       Array.isArray(cloudMediaPayload.locketSnaps) && cloudMediaPayload.locketSnaps.length > 0;
 
-    // Chỉ cập nhật backup khi số lượng sau khi gộp >= số lượng hiện tại trên máy (không bao giờ làm giảm/mất ảnh)
     if (
       (hasCloudAlbum && mergedMediaList.length > mediaList.length) ||
       (hasCloudLocket && mergedLocketSnaps.length > locketSnaps.length)
@@ -435,9 +595,10 @@ export const HomeScreen = () => {
   const [eventFilter, setEventFilter] = useState<'ALL' | 'DATE_PLAN' | 'MILESTONE'>('ALL');
   const [mediaFilter, setMediaFilter] = useState<'ALL' | 'IMAGE' | 'VIDEO'>('ALL');
   const [mediaVisibleCount, setMediaVisibleCount] = useState(MEDIA_PAGE_SIZE);
+
   useEffect(() => {
     setMediaVisibleCount(MEDIA_PAGE_SIZE);
-  }, [mediaFilter]);
+  }, [mediaFilter, selectedAlbumCategory]);
 
   const filteredEvents = React.useMemo(() => {
     if (eventFilter === 'DATE_PLAN') {
@@ -450,10 +611,17 @@ export const HomeScreen = () => {
   }, [events, eventFilter]);
 
   const filteredMediaList = React.useMemo(() => {
-    if (mediaFilter === 'IMAGE') return mergedMediaList.filter((m) => m.mediaType === 'IMAGE');
-    if (mediaFilter === 'VIDEO') return mergedMediaList.filter((m) => m.mediaType === 'VIDEO');
-    return mergedMediaList;
-  }, [mergedMediaList, mediaFilter]);
+    return mergedMediaList.filter((m) => {
+      const matchType = mediaFilter === 'ALL' ? true : m.mediaType === mediaFilter;
+      const matchCategory =
+        selectedAlbumCategory === 'ALL'
+          ? true
+          : selectedAlbumCategory === 'UNCATEGORIZED'
+            ? !m.albumCategory
+            : m.albumCategory === selectedAlbumCategory;
+      return matchType && matchCategory;
+    });
+  }, [mergedMediaList, mediaFilter, selectedAlbumCategory]);
 
   const horizontalPagerRef = useRef<ScrollView | null>(null);
   const [currentPage, setCurrentPage] = useState<0 | 1>(0);
@@ -497,7 +665,8 @@ export const HomeScreen = () => {
       setQaSubmitting(false);
     }
   };
-  const [selectedMedia, setSelectedMedia] = useState<CoupleMediaItem | null>(null);
+
+  const [selectedMedia, setSelectedMedia] = useState<AlbumMediaWithCategory | null>(null);
   const [pinUnlockInput, setPinUnlockInput] = useState('');
 
   const handleAutoScanMomoClipboard = useCallback(
@@ -548,6 +717,15 @@ export const HomeScreen = () => {
         await storage.setItem(anniversaryCacheKey, parsed.anniversaryDate);
       }
 
+      if (Array.isArray(parsed.albumCategories)) {
+        await saveAlbumCategoriesList(parsed.albumCategories);
+      }
+
+      if (parsed.itemCategoryMap && typeof parsed.itemCategoryMap === 'object') {
+        setItemCategoryMap(parsed.itemCategoryMap);
+        await storage.setItem(itemCategoryMapKey, JSON.stringify(parsed.itemCategoryMap));
+      }
+
       const exportedByUserId = parsed.exportedByUserId || parsed.myProfile?.userId;
       const isExportedByPartner =
         Boolean(exportedByUserId) &&
@@ -590,7 +768,14 @@ export const HomeScreen = () => {
         mediaList: parsed.mediaList,
       });
     },
-    [anniversaryCacheKey, coupleId, currentUserId, restoreWorkspaceBackup],
+    [
+      anniversaryCacheKey,
+      coupleId,
+      currentUserId,
+      itemCategoryMapKey,
+      restoreWorkspaceBackup,
+      saveAlbumCategoriesList,
+    ],
   );
 
   const handleOpenMomoAndContribute = useCallback(
@@ -668,7 +853,13 @@ export const HomeScreen = () => {
     storage.getItem(anniversaryCacheKey).then((saved) => {
       setCachedAnniversaryIso(saved || null);
     });
-  }, [hydrateSettings, pullSharedRoomSettingsFromServer, currentUserId, coupleId, anniversaryCacheKey]);
+  }, [
+    hydrateSettings,
+    pullSharedRoomSettingsFromServer,
+    currentUserId,
+    coupleId,
+    anniversaryCacheKey,
+  ]);
 
   const { data: counterData, isLoading, refetch } = useQuery({
     queryKey: ['dayCounter', coupleId, currentUserId],
@@ -698,6 +889,7 @@ export const HomeScreen = () => {
     },
     [screenWidth],
   );
+
   // Mỗi khi server trả ngày kỷ niệm mới thì cập nhật bản lưu trong máy theo server
   useEffect(() => {
     const serverAnniv = counterData?.anniversaryDate || counterData?.startDate;
@@ -847,6 +1039,8 @@ export const HomeScreen = () => {
         heartTapTotal,
         events,
         goals,
+        albumCategories,
+        itemCategoryMap,
         locketSnaps: mergedLocketSnaps,
         mediaList: mergedMediaList,
         locketCount: mergedLocketSnaps.length,
@@ -865,7 +1059,10 @@ export const HomeScreen = () => {
     setPagerHeight(Math.round(e.nativeEvent.layout.height));
   }, []);
   const pageStyle = React.useMemo(
-    () => (pagerHeight > 0 ? { width: screenWidth, height: pagerHeight } : { width: screenWidth, flex: 1 }),
+    () =>
+      pagerHeight > 0
+        ? { width: screenWidth, height: pagerHeight }
+        : { width: screenWidth, flex: 1 },
     [screenWidth, pagerHeight],
   );
   const [reactionSnapId, setReactionSnapId] = useState<string | null>(null);
@@ -931,18 +1128,18 @@ export const HomeScreen = () => {
 
   // Chụp Locket: lưu Local trước để hiển thị tức thì, sau đó đẩy thẳng lên S3/R2 + PostgreSQL
   const handleCapturePhotoUri = useCallback(
-  async (uri: string, stamp: string, cap: string) => {
-    await saveCapturedLocketUri(uri, stamp, cap);
-    if (coupleId) {
-      setTimeout(() => {
-        void queryClient.invalidateQueries({
-          queryKey: ['cloudWorkspaceMedia', coupleId],
-        });
-      }, 1500);
-    }
-  },
-  [saveCapturedLocketUri, coupleId, queryClient],
-);
+    async (uri: string, stamp: string, cap: string) => {
+      await saveCapturedLocketUri(uri, stamp, cap);
+      if (coupleId) {
+        setTimeout(() => {
+          void queryClient.invalidateQueries({
+            queryKey: ['cloudWorkspaceMedia', coupleId],
+          });
+        }, 1500);
+      }
+    },
+    [saveCapturedLocketUri, coupleId, queryClient],
+  );
 
   const handlePickFromGallery = useCallback(
     async (stamp: string, cap: string) => {
@@ -956,52 +1153,162 @@ export const HomeScreen = () => {
     [captureCoupleLocket, coupleId, queryClient],
   );
 
+  // Thêm nhanh ảnh/video vào đúng Danh mục đang chọn
   const handlePickAndSaveAlbumMedia = useCallback(
-    async (type: 'IMAGE' | 'VIDEO') => {
-      await pickAndSaveMedia(type);
+    async (type: 'IMAGE' | 'VIDEO', targetCategoryOverride?: string) => {
+      const activeCat =
+        targetCategoryOverride ??
+        (selectedAlbumCategory !== 'ALL' && selectedAlbumCategory !== 'UNCATEGORIZED'
+          ? selectedAlbumCategory
+          : null);
+
+      pendingTargetCategoryRef.current = activeCat;
+      const prevIds = new Set(mergedMediaList.map((m) => m.id));
+
+      await pickAndSaveMedia(type, activeCat || undefined);
+
       if (coupleId) {
-        void queryClient.invalidateQueries({
-          queryKey: ['cloudWorkspaceMedia', coupleId],
-        });
+        const refreshed = await refetchCloudMedia();
+        const newestCloud = refreshed.data?.albumMedia?.find(
+          (m) => m.caption !== 'thumbnail' && m.caption !== 'Hero Wallpaper',
+        );
+        if (activeCat && newestCloud && !prevIds.has(newestCloud.id)) {
+          await assignMediaToCategory(newestCloud.id, activeCat, newestCloud.remoteUrl);
+        }
       }
     },
-    [pickAndSaveMedia, coupleId, queryClient],
+    [
+      selectedAlbumCategory,
+      mergedMediaList,
+      pickAndSaveMedia,
+      coupleId,
+      refetchCloudMedia,
+      assignMediaToCategory,
+    ],
   );
+
+  // Tự động gán danh mục cho ảnh mới vừa thêm ở Local
+  useEffect(() => {
+    const targetCat = pendingTargetCategoryRef.current;
+    if (!targetCat || mediaList.length === 0) return;
+    const newestLocal = mediaList.find(
+      (m) => m.caption !== 'thumbnail' && m.caption !== 'Hero Wallpaper',
+    );
+    if (newestLocal && !itemCategoryMap[newestLocal.id]) {
+      void assignMediaToCategory(newestLocal.id, targetCat, newestLocal.remoteUrl);
+      pendingTargetCategoryRef.current = null;
+    }
+  }, [mediaList, itemCategoryMap, assignMediaToCategory]);
 
   const handleSwipeToDashboard = useCallback(() => {
     switchHorizontalPage(1);
   }, [switchHorizontalPage]);
 
+  // Xóa Locket ở cả Local + Cache + Supabase Database & S3 Storage
   const handleDeleteLocketSnap = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      const targetSnap = mergedLocketSnaps.find((s) => s.id === id);
       void deleteLocketSnap(id);
+
+      queryClient.setQueryData(
+        ['cloudWorkspaceMedia', coupleId, currentUserId],
+        (oldData: any) => {
+          if (!oldData) return oldData;
+          return {
+            ...oldData,
+            locketSnaps: Array.isArray(oldData.locketSnaps)
+              ? oldData.locketSnaps.filter(
+                  (s: any) =>
+                    s.id !== id &&
+                    (!targetSnap?.remoteUrl || s.remoteUrl !== targetSnap.remoteUrl),
+                )
+              : [],
+          };
+        },
+      );
+
+      const updatedSnaps = mergedLocketSnaps.filter((s) => s.id !== id);
+      void restoreWorkspaceBackup({
+        mediaList: mergedMediaList,
+        locketSnaps: updatedSnaps,
+      });
+
       if (coupleId) {
-        deleteCloudMediaById(id)
-          .then(() => {
-            void queryClient.invalidateQueries({
-              queryKey: ['cloudWorkspaceMedia', coupleId],
-            });
-          })
-          .catch(() => null);
+        try {
+          await deleteCloudMediaById(id);
+          await queryClient.invalidateQueries({
+            queryKey: ['cloudWorkspaceMedia', coupleId],
+          });
+        } catch (err) {
+          console.warn('Không thể xóa Locket trên Cloud:', err);
+        }
       }
     },
-    [deleteLocketSnap, coupleId, queryClient],
+    [
+      mergedLocketSnaps,
+      mergedMediaList,
+      deleteLocketSnap,
+      queryClient,
+      coupleId,
+      currentUserId,
+      restoreWorkspaceBackup,
+    ],
   );
 
+  // Xóa ảnh/video Album ở cả Local + Cache + Supabase Database & S3 Storage
   const handleDeleteAlbumMedia = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      const targetItem = mergedMediaList.find((m) => m.id === id);
+
+      // 1. Xóa ngay trên UI & Local Storage
       void deleteMedia(id);
+
+      // 2. Xóa khỏi React Query Cache ngay lập tức để không bị useEffect ghi đè lại
+      queryClient.setQueryData(
+        ['cloudWorkspaceMedia', coupleId, currentUserId],
+        (oldData: any) => {
+          if (!oldData) return oldData;
+          return {
+            ...oldData,
+            albumMedia: Array.isArray(oldData.albumMedia)
+              ? oldData.albumMedia.filter(
+                  (m: any) =>
+                    m.id !== id &&
+                    (!targetItem?.remoteUrl || m.remoteUrl !== targetItem.remoteUrl),
+                )
+              : [],
+          };
+        },
+      );
+
+      // 3. Cập nhật lại bản backup Local ngay lập tức
+      const updatedMedia = mergedMediaList.filter((m) => m.id !== id);
+      void restoreWorkspaceBackup({
+        mediaList: updatedMedia,
+        locketSnaps: mergedLocketSnaps,
+      });
+
+      // 4. Gọi API xóa vĩnh viễn trên Supabase Database (coupleMedia + post) & S3 Storage
       if (coupleId) {
-        deleteCloudMediaById(id)
-          .then(() => {
-            void queryClient.invalidateQueries({
-              queryKey: ['cloudWorkspaceMedia', coupleId],
-            });
-          })
-          .catch(() => null);
+        try {
+          await deleteCloudMediaById(id);
+          await queryClient.invalidateQueries({
+            queryKey: ['cloudWorkspaceMedia', coupleId],
+          });
+        } catch (err) {
+          console.warn('Không thể xóa media trên Cloud:', err);
+        }
       }
     },
-    [deleteMedia, coupleId, queryClient],
+    [
+      mergedMediaList,
+      mergedLocketSnaps,
+      deleteMedia,
+      queryClient,
+      coupleId,
+      currentUserId,
+      restoreWorkspaceBackup,
+    ],
   );
 
   const handleReactLocketSnap = useCallback(
@@ -1059,7 +1366,11 @@ export const HomeScreen = () => {
         <TextInput
           style={[
             styles.pinInputBox,
-            { borderColor: colors.primary, color: colors.textPrimary, backgroundColor: colors.surface },
+            {
+              borderColor: colors.primary,
+              color: colors.textPrimary,
+              backgroundColor: colors.surface,
+            },
           ]}
           keyboardType="number-pad"
           maxLength={4}
@@ -1084,7 +1395,11 @@ export const HomeScreen = () => {
     <View
       style={[
         styles.screen,
-        { backgroundColor: colors.background, paddingTop: insets.top, paddingBottom: insets.bottom },
+        {
+          backgroundColor: colors.background,
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom,
+        },
       ]}
     >
       <StatusBar
@@ -1355,7 +1670,10 @@ export const HomeScreen = () => {
                     </Pressable>
 
                     <Pressable
-                      style={[styles.addBtn, { backgroundColor: colors.primary, paddingHorizontal: 12 }]}
+                      style={[
+                        styles.addBtn,
+                        { backgroundColor: colors.primary, paddingHorizontal: 12 },
+                      ]}
                       onPress={() =>
                         setFormModal({
                           visible: true,
@@ -1816,7 +2134,14 @@ export const HomeScreen = () => {
                         <Text style={{ fontSize: 11, fontWeight: '800', color: '#A50064' }}>
                           QUỸ CHUNG MOMO CẶP ĐÔI
                         </Text>
-                        <Text style={{ fontSize: 16, fontWeight: '800', color: '#1E293B', marginTop: 2 }}>
+                        <Text
+                          style={{
+                            fontSize: 16,
+                            fontWeight: '800',
+                            color: '#1E293B',
+                            marginTop: 2,
+                          }}
+                        >
                           {momoFund?.holderName || 'Quỹ chung hai đứa'}
                         </Text>
                         <Text style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
@@ -1841,7 +2166,15 @@ export const HomeScreen = () => {
                       </Pressable>
                     </View>
 
-                    <Text style={{ fontSize: 11, fontWeight: '600', color: '#831843', marginTop: 8, marginBottom: 6 }}>
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: '600',
+                        color: '#831843',
+                        marginTop: 8,
+                        marginBottom: 6,
+                      }}
+                    >
                       Nạp nhanh vào mục tiêu đầu tiên qua App MoMo:
                     </Text>
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -1943,8 +2276,16 @@ export const HomeScreen = () => {
                                 {goal.title}
                               </Text>
                               {isMomoGoal && (
-                                <Text style={{ fontSize: 11, fontWeight: '700', color: '#A50064', marginTop: 2 }}>
-                                  Quỹ tiết kiệm MoMo • Còn thiếu {remainingAmount.toLocaleString('vi-VN')}đ
+                                <Text
+                                  style={{
+                                    fontSize: 11,
+                                    fontWeight: '700',
+                                    color: '#A50064',
+                                    marginTop: 2,
+                                  }}
+                                >
+                                  Quỹ tiết kiệm MoMo • Còn thiếu{' '}
+                                  {remainingAmount.toLocaleString('vi-VN')}đ
                                 </Text>
                               )}
                             </View>
@@ -1961,13 +2302,17 @@ export const HomeScreen = () => {
                                 })
                               }
                             >
-                              <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '600' }}>
+                              <Text
+                                style={{ color: colors.primary, fontSize: 12, fontWeight: '600' }}
+                              >
                                 Sửa
                               </Text>
                             </Pressable>
 
                             <Pressable hitSlop={8} onPress={() => deleteGoal(goal.id)}>
-                              <Text style={{ color: colors.error, fontSize: 12, fontWeight: '600' }}>
+                              <Text
+                                style={{ color: colors.error, fontSize: 12, fontWeight: '600' }}
+                              >
                                 Xóa
                               </Text>
                             </Pressable>
@@ -1976,7 +2321,13 @@ export const HomeScreen = () => {
 
                         <View style={styles.goalProgressSection}>
                           <View style={styles.cardTopRow}>
-                            <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textSecondary }}>
+                            <Text
+                              style={{
+                                fontSize: 12,
+                                fontWeight: '600',
+                                color: colors.textSecondary,
+                              }}
+                            >
                               {goal.currentAmount.toLocaleString('vi-VN')} /{' '}
                               {goal.targetAmount.toLocaleString('vi-VN')} {goal.unitLabel}
                             </Text>
@@ -1993,7 +2344,11 @@ export const HomeScreen = () => {
                           <View
                             style={[
                               styles.progressBarBg,
-                              { backgroundColor: colors.surfaceVariant, height: 8, borderRadius: 4 },
+                              {
+                                backgroundColor: colors.surfaceVariant,
+                                height: 8,
+                                borderRadius: 4,
+                              },
                             ]}
                           >
                             <View
@@ -2073,44 +2428,46 @@ export const HomeScreen = () => {
                           </View>
                         )}
 
-                        {isMomoGoal && goal.momoTransactions && goal.momoTransactions.length > 0 && (
-                          <View
-                            style={{
-                              marginTop: 10,
-                              paddingTop: 8,
-                              borderTopWidth: StyleSheet.hairlineWidth,
-                              borderTopColor: colors.borderSubtle,
-                            }}
-                          >
-                            {goal.momoTransactions.slice(0, 3).map((tx) => (
-                              <View
-                                key={tx.id}
-                                style={{
-                                  flexDirection: 'row',
-                                  justifyContent: 'space-between',
-                                  marginTop: 4,
-                                }}
-                              >
-                                <Text
-                                  style={{ fontSize: 11, color: colors.textSecondary, flex: 1 }}
-                                  numberOfLines={1}
-                                >
-                                  {tx.actor}: {tx.note}
-                                </Text>
-                                <Text
+                        {isMomoGoal &&
+                          goal.momoTransactions &&
+                          goal.momoTransactions.length > 0 && (
+                            <View
+                              style={{
+                                marginTop: 10,
+                                paddingTop: 8,
+                                borderTopWidth: StyleSheet.hairlineWidth,
+                                borderTopColor: colors.borderSubtle,
+                              }}
+                            >
+                              {goal.momoTransactions.slice(0, 3).map((tx) => (
+                                <View
+                                  key={tx.id}
                                   style={{
-                                    fontSize: 11,
-                                    fontWeight: '700',
-                                    color: tx.type === 'IN' ? '#16A34A' : '#DC2626',
+                                    flexDirection: 'row',
+                                    justifyContent: 'space-between',
+                                    marginTop: 4,
                                   }}
                                 >
-                                  {tx.type === 'IN' ? '+' : '-'}
-                                  {tx.amount.toLocaleString('vi-VN')}đ
-                                </Text>
-                              </View>
-                            ))}
-                          </View>
-                        )}
+                                  <Text
+                                    style={{ fontSize: 11, color: colors.textSecondary, flex: 1 }}
+                                    numberOfLines={1}
+                                  >
+                                    {tx.actor}: {tx.note}
+                                  </Text>
+                                  <Text
+                                    style={{
+                                      fontSize: 11,
+                                      fontWeight: '700',
+                                      color: tx.type === 'IN' ? '#16A34A' : '#DC2626',
+                                    }}
+                                  >
+                                    {tx.type === 'IN' ? '+' : '-'}
+                                    {tx.amount.toLocaleString('vi-VN')}đ
+                                  </Text>
+                                </View>
+                              ))}
+                            </View>
+                          )}
 
                         <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 8 }}>
                           Hạn định: {goal.targetDate}
@@ -2144,7 +2501,9 @@ export const HomeScreen = () => {
                                   }}
                                   onPress={() => void handleOpenMomoAndContribute(amt, goal)}
                                 >
-                                  <Text style={{ color: '#A50064', fontSize: 11, fontWeight: '700' }}>
+                                  <Text
+                                    style={{ color: '#A50064', fontSize: 11, fontWeight: '700' }}
+                                  >
                                     +{amt / 1000}k
                                   </Text>
                                 </Pressable>
@@ -2261,7 +2620,9 @@ export const HomeScreen = () => {
                   ) : hasMyAnswer ? (
                     <View style={{ marginTop: 14 }}>
                       <View style={[styles.qaBubble, { backgroundColor: colors.surfaceVariant }]}>
-                        <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>
+                        <Text
+                          style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}
+                        >
                           Bạn đã gửi câu trả lời
                         </Text>
                         <Text
@@ -2353,7 +2714,9 @@ export const HomeScreen = () => {
                             <Text style={{ fontSize: 12, color: colors.textPrimary, marginTop: 6 }}>
                               {myProfile.nickname}: {hist.myAnswer}
                             </Text>
-                            <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>
+                            <Text
+                              style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}
+                            >
                               {partnerProfile.nickname}: {hist.partnerAnswer}
                             </Text>
                           </>
@@ -2369,44 +2732,175 @@ export const HomeScreen = () => {
               </View>
             )}
 
-            {/* TAB 4: ALBUM ẢNH & VIDEO */}
+            {/* TAB 4: ALBUM ẢNH & VIDEO CÓ DANH MỤC & NÚT THÊM NHANH */}
             {activeTab === 'MEDIA' && (
               <View style={styles.sectionWrap}>
                 <View style={styles.sectionHeaderRow}>
-                  <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
-                    Kho lưu trữ ({filteredMediaList.length})
-                  </Text>
+                  <View style={{ flex: 1, paddingRight: 8 }}>
+                    <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
+                      Kho lưu trữ ({filteredMediaList.length})
+                    </Text>
+                    <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 2 }}>
+                      {selectedAlbumCategory === 'ALL'
+                        ? 'Đang xem tất cả danh mục • Nhấn giữ danh mục để xóa'
+                        : selectedAlbumCategory === 'UNCATEGORIZED'
+                          ? 'Các ảnh & video chưa phân loại'
+                          : `Đang mở danh mục: 📁 ${selectedAlbumCategory}`}
+                    </Text>
+                  </View>
+
                   <View style={styles.mediaButtonGroup}>
                     <Pressable
-                      style={[styles.addBtn, { backgroundColor: colors.surfaceVariant }]}
-                      onPress={() => void handlePickAndSaveAlbumMedia('IMAGE')}
-                      disabled={uploadingMedia}
+                      style={[
+                        styles.addBtn,
+                        { backgroundColor: colors.primaryContainer, paddingHorizontal: 12 },
+                      ]}
+                      onPress={() => setCreateCategoryModalVisible(true)}
                     >
-                      <Text style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '600' }}>
-                        Thêm ảnh
+                      <Text
+                        style={{
+                          color: colors.onPrimaryContainer,
+                          fontSize: 12,
+                          fontWeight: '700',
+                        }}
+                      >
+                        📁 + Tạo danh mục
                       </Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.addBtn, { backgroundColor: colors.primary }]}
-                      onPress={() => void handlePickAndSaveAlbumMedia('VIDEO')}
-                      disabled={uploadingMedia}
-                    >
-                      <Text style={styles.addBtnText}>Thêm video</Text>
                     </Pressable>
                   </View>
                 </View>
 
+                {/* THANH NÚT THÊM ẢNH / VIDEO NHANH */}
+                <View style={styles.quickUploadBar}>
+                  <Pressable
+                    style={[
+                      styles.quickUploadBtnOutline,
+                      {
+                        backgroundColor: colors.surface,
+                        borderColor: colors.primary,
+                        opacity: uploadingMedia ? 0.6 : 1,
+                      },
+                    ]}
+                    onPress={() => void handlePickAndSaveAlbumMedia('IMAGE')}
+                    disabled={uploadingMedia}
+                  >
+                    <Text style={{ fontSize: 15 }}>📸</Text>
+                    <Text
+                      style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }}
+                      numberOfLines={1}
+                    >
+                      {uploadingMedia
+                        ? 'Đang tải...'
+                        : selectedAlbumCategory !== 'ALL' &&
+                            selectedAlbumCategory !== 'UNCATEGORIZED'
+                          ? `+ Ảnh vào "${selectedAlbumCategory}"`
+                          : '+ Thêm ảnh nhanh'}
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={[
+                      styles.quickUploadBtnPrimary,
+                      {
+                        backgroundColor: colors.primary,
+                        opacity: uploadingMedia ? 0.6 : 1,
+                      },
+                    ]}
+                    onPress={() => void handlePickAndSaveAlbumMedia('VIDEO')}
+                    disabled={uploadingMedia}
+                  >
+                    <Text style={{ fontSize: 15 }}>🎬</Text>
+                    <Text
+                      style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}
+                      numberOfLines={1}
+                    >
+                      {uploadingMedia
+                        ? 'Đang tải...'
+                        : selectedAlbumCategory !== 'ALL' &&
+                            selectedAlbumCategory !== 'UNCATEGORIZED'
+                          ? `+ Video vào "${selectedAlbumCategory}"`
+                          : '+ Thêm video nhanh'}
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {/* DANH SÁCH DANH MỤC ALBUM (FOLDERS) */}
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.folderScrollContainer}
+                >
+                  {[
+                    {
+                      key: 'ALL',
+                      label: `🗂️ Tất cả (${mergedMediaList.length})`,
+                    },
+                    ...albumCategories.map((cat) => ({
+                      key: cat,
+                      label: `📁 ${cat} (${
+                        mergedMediaList.filter((m) => m.albumCategory === cat).length
+                      })`,
+                    })),
+                    {
+                      key: 'UNCATEGORIZED',
+                      label: `📌 Chưa phân loại (${
+                        mergedMediaList.filter((m) => !m.albumCategory).length
+                      })`,
+                    },
+                  ].map((folder) => {
+                    const active = selectedAlbumCategory === folder.key;
+                    const isCustomFolder =
+                      folder.key !== 'ALL' && folder.key !== 'UNCATEGORIZED';
+                    return (
+                      <Pressable
+                        key={folder.key}
+                        style={[
+                          styles.mediaFilterChip,
+                          {
+                            backgroundColor: active ? colors.textPrimary : colors.surface,
+                            borderWidth: 1,
+                            borderColor: active ? colors.textPrimary : colors.borderSubtle,
+                            paddingVertical: 7,
+                            paddingHorizontal: 13,
+                          },
+                        ]}
+                        onPress={() => setSelectedAlbumCategory(folder.key)}
+                        onLongPress={() => {
+                          if (isCustomFolder) {
+                            handleDeleteAlbumCategory(folder.key);
+                          }
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 12,
+                            fontWeight: '700',
+                            color: active ? colors.surface : colors.textPrimary,
+                          }}
+                        >
+                          {folder.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+
+                {/* BỘ LỌC ĐỊNH DẠNG: TẤT CẢ / ẢNH / VIDEO */}
                 <View style={styles.mediaFilterRow}>
                   {(
                     [
-                      { key: 'ALL', label: `Tất cả (${mergedMediaList.length})` },
+                      { key: 'ALL', label: `Mọi định dạng` },
                       {
                         key: 'IMAGE',
-                        label: `Ảnh (${mergedMediaList.filter((m) => m.mediaType === 'IMAGE').length})`,
+                        label: `🖼️ Chỉ Ảnh (${
+                          filteredMediaList.filter((m) => m.mediaType === 'IMAGE').length
+                        })`,
                       },
                       {
                         key: 'VIDEO',
-                        label: `Video (${mergedMediaList.filter((m) => m.mediaType === 'VIDEO').length})`,
+                        label: `🎥 Chỉ Video (${
+                          filteredMediaList.filter((m) => m.mediaType === 'VIDEO').length
+                        })`,
                       },
                     ] as const
                   ).map((f) => {
@@ -2442,11 +2936,43 @@ export const HomeScreen = () => {
                     ]}
                   >
                     <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>
-                      Chưa có nội dung
+                      Chưa có ảnh/video trong mục này
                     </Text>
-                    <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: 'center' }}>
-                      Không tìm thấy {mediaFilter === 'IMAGE' ? 'hình ảnh' : mediaFilter === 'VIDEO' ? 'video' : 'mục'} nào trong album.
+                    <Text
+                      style={{
+                        color: colors.textSecondary,
+                        fontSize: 13,
+                        textAlign: 'center',
+                        marginBottom: 12,
+                      }}
+                    >
+                      Bấm nút bên dưới để thêm nhanh khoảnh khắc vào{' '}
+                      {selectedAlbumCategory !== 'ALL' &&
+                      selectedAlbumCategory !== 'UNCATEGORIZED'
+                        ? `danh mục "${selectedAlbumCategory}"`
+                        : 'Album của hai bạn'}
+                      .
                     </Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <Pressable
+                        style={[styles.addBtn, { backgroundColor: colors.primary }]}
+                        onPress={() => void handlePickAndSaveAlbumMedia('IMAGE')}
+                        disabled={uploadingMedia}
+                      >
+                        <Text style={styles.addBtnText}>+ Thêm ảnh ngay</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.addBtn, { backgroundColor: colors.surfaceVariant }]}
+                        onPress={() => void handlePickAndSaveAlbumMedia('VIDEO')}
+                        disabled={uploadingMedia}
+                      >
+                        <Text
+                          style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '700' }}
+                        >
+                          + Thêm video
+                        </Text>
+                      </Pressable>
+                    </View>
                   </View>
                 ) : (
                   <View>
@@ -2462,10 +2988,15 @@ export const HomeScreen = () => {
                     </View>
                     {filteredMediaList.length > mediaVisibleCount && (
                       <Pressable
-                        style={[styles.mediaLoadMoreBtn, { backgroundColor: colors.surfaceVariant }]}
+                        style={[
+                          styles.mediaLoadMoreBtn,
+                          { backgroundColor: colors.surfaceVariant },
+                        ]}
                         onPress={() => setMediaVisibleCount((c) => c + MEDIA_PAGE_SIZE)}
                       >
-                        <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '600' }}>
+                        <Text
+                          style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '600' }}
+                        >
                           Xem thêm ({filteredMediaList.length - mediaVisibleCount})
                         </Text>
                       </Pressable>
@@ -2605,7 +3136,10 @@ export const HomeScreen = () => {
             </Text>
 
             <TextInput
-              style={[styles.qaInput, { borderColor: colors.outline, color: colors.textPrimary, marginBottom: 10 }]}
+              style={[
+                styles.qaInput,
+                { borderColor: colors.outline, color: colors.textPrimary, marginBottom: 10 },
+              ]}
               keyboardType="numeric"
               placeholder="Nhập số tiền (VD: 200000)"
               placeholderTextColor={colors.textSecondary}
@@ -2617,7 +3151,7 @@ export const HomeScreen = () => {
               style={[styles.qaInput, { borderColor: colors.outline, color: colors.textPrimary }]}
               placeholder="Nội dung giao dịch (VD: Góp quỹ tháng 10)"
               placeholderTextColor={colors.textSecondary}
-              value={txAmountInput ? txNoteInput : txNoteInput}
+              value={txNoteInput}
               onChangeText={setTxNoteInput}
             />
 
@@ -2684,6 +3218,61 @@ export const HomeScreen = () => {
         onClose={closeReactionSheet}
       />
 
+      {/* MODAL TẠO DANH MỤC ALBUM MỚI */}
+      <Modal
+        visible={createCategoryModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCreateCategoryModalVisible(false)}
+      >
+        <View style={[styles.mediaModalBackdrop, { backgroundColor: colors.backdrop }]}>
+          <View style={[styles.mediaModalCard, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.cardMainTitle, { color: colors.textPrimary, marginBottom: 4 }]}>
+              📁 Tạo danh mục Album mới
+            </Text>
+            <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 12 }}>
+              Đặt tên danh mục để phân loại ảnh & video kỷ niệm (VD: Đi Đà Lạt, Kỷ niệm 1 năm...).
+            </Text>
+
+            <TextInput
+              style={[
+                styles.qaInput,
+                { borderColor: colors.outline, color: colors.textPrimary },
+              ]}
+              placeholder="Nhập tên danh mục..."
+              placeholderTextColor={colors.textSecondary}
+              value={newCategoryNameInput}
+              onChangeText={setNewCategoryNameInput}
+              autoFocus
+            />
+
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+              <Pressable
+                style={[styles.addBtn, { backgroundColor: colors.surfaceVariant, flex: 1 }]}
+                onPress={() => {
+                  setNewCategoryNameInput('');
+                  setCreateCategoryModalVisible(false);
+                }}
+              >
+                <Text style={{ color: colors.textPrimary, fontWeight: '600', fontSize: 12 }}>
+                  Hủy
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={[styles.addBtn, { backgroundColor: colors.primary, flex: 1.5 }]}
+                onPress={() => void handleCreateAlbumCategory()}
+              >
+                <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 12 }}>
+                  Tạo danh mục
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL XEM CHI TIẾT ẢNH / VIDEO & CHUYỂN DANH MỤC */}
       <Modal
         visible={!!selectedMedia}
         transparent
@@ -2693,10 +3282,13 @@ export const HomeScreen = () => {
         <View style={[styles.mediaModalBackdrop, { backgroundColor: colors.backdrop }]}>
           <View style={[styles.mediaModalCard, { backgroundColor: colors.surface }]}>
             {selectedMedia?.mediaType === 'IMAGE' && (
-              <Image
+              <ExpoImage
                 source={{ uri: selectedMedia.remoteUrl || selectedMedia.uri }}
                 style={styles.fullPreviewImage}
-                resizeMode="contain"
+                contentFit="contain"
+                allowDownscaling={false}
+                transition={200}
+                cachePolicy="memory-disk"
               />
             )}
 
@@ -2704,12 +3296,93 @@ export const HomeScreen = () => {
               <InlineVideoPlayer uri={selectedMedia.remoteUrl || selectedMedia.uri} />
             )}
 
-            <Text style={[styles.cardMainTitle, { color: colors.textPrimary, textAlign: 'center', marginTop: 12 }]}>
+            <Text
+              style={[
+                styles.cardMainTitle,
+                { color: colors.textPrimary, textAlign: 'center', marginTop: 12 },
+              ]}
+            >
               {selectedMedia?.caption}
             </Text>
-            <Text style={{ color: colors.textSecondary, fontSize: 12, textAlign: 'center', marginTop: 4 }}>
+            <Text
+              style={{
+                color: colors.textSecondary,
+                fontSize: 12,
+                textAlign: 'center',
+                marginTop: 4,
+              }}
+            >
               {selectedMedia?.createdAt}
             </Text>
+
+            {/* CHỌN / ĐỔI DANH MỤC CHO TỆP NÀY */}
+            <View style={{ marginTop: 12 }}>
+              <Text
+                style={{
+                  fontSize: 11,
+                  fontWeight: '700',
+                  color: colors.textSecondary,
+                  marginBottom: 6,
+                }}
+              >
+                📁 Chuyển vào danh mục:
+              </Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 6 }}
+              >
+                {albumCategories.map((cat) => {
+                  const currentCat = selectedMedia
+                    ? itemCategoryMap[selectedMedia.id] ||
+                      (selectedMedia.remoteUrl
+                        ? itemCategoryMap[selectedMedia.remoteUrl]
+                        : undefined) ||
+                      selectedMedia.albumCategory
+                    : undefined;
+                  const isAssigned = currentCat === cat;
+                  return (
+                    <Pressable
+                      key={cat}
+                      style={{
+                        paddingHorizontal: 10,
+                        paddingVertical: 5,
+                        borderRadius: 12,
+                        backgroundColor: isAssigned ? colors.primary : colors.surfaceVariant,
+                      }}
+                      onPress={() => {
+                        if (selectedMedia) {
+                          const nextCat = isAssigned ? 'ALL' : cat;
+                          void assignMediaToCategory(
+                            selectedMedia.id,
+                            nextCat,
+                            selectedMedia.remoteUrl,
+                          );
+                          setSelectedMedia((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  albumCategory: nextCat === 'ALL' ? undefined : nextCat,
+                                }
+                              : null,
+                          );
+                        }
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 11,
+                          fontWeight: '700',
+                          color: isAssigned ? '#FFFFFF' : colors.textPrimary,
+                        }}
+                      >
+                        {isAssigned ? `✓ ${cat}` : cat}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
 
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
               <Pressable
@@ -2720,26 +3393,32 @@ export const HomeScreen = () => {
                   }
                 }}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '600', fontSize: 12 }}>⬇ Tải về</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '600', fontSize: 12 }}>
+                  ⬇ Tải về
+                </Text>
               </Pressable>
 
               <Pressable
                 style={[styles.addBtn, { backgroundColor: colors.errorContainer, flex: 1 }]}
                 onPress={() => {
                   if (selectedMedia) {
-                    handleDeleteAlbumMedia(selectedMedia.id);
+                    void handleDeleteAlbumMedia(selectedMedia.id);
                     setSelectedMedia(null);
                   }
                 }}
               >
-                <Text style={{ color: colors.error, fontWeight: '600', fontSize: 12 }}>Xóa</Text>
+                <Text style={{ color: colors.error, fontWeight: '600', fontSize: 12 }}>
+                  Xóa vĩnh viễn
+                </Text>
               </Pressable>
 
               <Pressable
                 style={[styles.addBtn, { backgroundColor: colors.surfaceVariant, flex: 1 }]}
                 onPress={() => setSelectedMedia(null)}
               >
-                <Text style={{ color: colors.textPrimary, fontWeight: '600', fontSize: 12 }}>Đóng</Text>
+                <Text style={{ color: colors.textPrimary, fontWeight: '600', fontSize: 12 }}>
+                  Đóng
+                </Text>
               </Pressable>
             </View>
           </View>
@@ -2855,6 +3534,36 @@ const styles = StyleSheet.create({
     gap: 8,
     alignItems: 'center',
   },
+  quickUploadBar: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  quickUploadBtnOutline: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1.5,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+  },
+  quickUploadBtnPrimary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+  },
+  folderScrollContainer: {
+    gap: 8,
+    paddingBottom: 10,
+  },
   sectionTitle: { fontSize: 16, fontWeight: '700' },
   addBtn: {
     minHeight: 36,
@@ -2966,6 +3675,21 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  mediaCategoryBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    maxWidth: '82%',
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  mediaCategoryBadgeText: {
+    color: '#F8FAFC',
+    fontSize: 10,
+    fontWeight: '700',
+  },
   playCircle: {
     width: 40,
     height: 40,
@@ -2994,10 +3718,15 @@ const styles = StyleSheet.create({
   },
   mediaModalBackdrop: { flex: 1, justifyContent: 'center', padding: 18 },
   mediaModalCard: { borderRadius: 18, padding: 16 },
-  fullPreviewImage: { width: '100%', height: 300, borderRadius: 12 },
+  fullPreviewImage: {
+    width: '100%',
+    height: 420,
+    borderRadius: 12,
+    backgroundColor: '#0F172A',
+  },
   inlineVideoBox: {
     width: '100%',
-    height: 300,
+    height: 360,
     borderRadius: 12,
     backgroundColor: '#000000',
   },

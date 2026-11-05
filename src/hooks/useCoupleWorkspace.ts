@@ -2569,6 +2569,29 @@ export function useCoupleWorkspace() {
 
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
+    // --- BẮT ĐẦU KIỂM TRA GIỚI HẠN VIDEO 200MB ---
+      const MAX_VIDEO_BYTES = 200 * 1024 * 1024; // 200MB
+      if (type === 'VIDEO') {
+        let videoSize = asset.fileSize ?? 0;
+
+        // Trên Web đôi khi asset.fileSize không trả về, lấy từ Blob để chính xác 100%
+        if (!videoSize && Platform.OS === 'web') {
+          try {
+            const blob = await fetch(asset.uri).then((r) => r.blob());
+            videoSize = blob.size;
+          } catch {}
+        }
+
+        if (videoSize > MAX_VIDEO_BYTES) {
+          const sizeInMb = (videoSize / (1024 * 1024)).toFixed(1);
+          Alert.alert(
+            'Video vượt quá 200MB',
+            `Video bạn chọn nặng ${sizeInMb}MB (tối đa cho phép là 200MB). Vui lòng chọn video ngắn hoặc nhẹ hơn nhé!`,
+          );
+          return;
+        }
+      }
+      // --- KẾT THÚC KIỂM TRA GIỚI HẠN VIDEO 200MB ---
     setUploadingMedia(true);
 
     try {
@@ -2592,6 +2615,7 @@ export function useCoupleWorkspace() {
           category: 'ALBUM_MEDIA',
           mediaType: type,
           caption: captionText,
+          stamp: albumCategory || undefined,
           durationSec,
           idempotencyKey: itemId,
         });
