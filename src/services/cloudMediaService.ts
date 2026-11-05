@@ -23,6 +23,9 @@ export interface UploadMediaInput {
   stamp?: string;
   durationSec?: number;
   idempotencyKey?: string;
+  // Dùng cho avatar / hình nền: kết quả chỉ cần link, không đưa vào hàng đợi offline
+  // (hàng đợi sẽ tải lên rồi không ai gắn link vào hồ sơ, chỉ làm đầy album)
+  skipOfflineQueue?: boolean;
 }
 
 export interface CloudMediaRecord {
@@ -72,7 +75,7 @@ const MAX_RETRY_ATTEMPTS = 3;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const buildIdempotencyKey = (prefix: string) =>
-  `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
 
 /**
@@ -80,39 +83,39 @@ const buildIdempotencyKey = (prefix: string) =>
  * vì expo-video-thumbnails và asset.duration không hoạt động đầy đủ trên web.
  */
 const getWebVideoMeta = (
-  uri: string,
+    uri: string,
 ): Promise<{ durationSec: number; thumbnailUri: string | null }> =>
-  new Promise((resolve) => {
-    const video = document.createElement('video');
-    video.preload = 'metadata';
-    video.muted = true;
-    video.playsInline = true;
-    video.src = uri;
+    new Promise((resolve) => {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+      video.src = uri;
 
-    let durationSec = 0;
-    const fail = () => resolve({ durationSec, thumbnailUri: null });
+      let durationSec = 0;
+      const fail = () => resolve({ durationSec, thumbnailUri: null });
 
-    video.onloadedmetadata = () => {
-      durationSec = Math.round(video.duration) || 0;
-      // Lấy khung hình ở giây thứ 2, video ngắn hơn thì lấy giữa video
-      video.currentTime = Math.min(2, (video.duration || 1) / 2);
-    };
-    video.onseeked = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        const srcW = video.videoWidth || 640;
-        const srcH = video.videoHeight || 360;
-        const scale = Math.min(1, 640 / srcW);
-        canvas.width = Math.round(srcW * scale);
-        canvas.height = Math.round(srcH * scale);
-        canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
-        resolve({ durationSec, thumbnailUri: canvas.toDataURL('image/jpeg', 0.7) });
-      } catch {
-        fail();
-      }
-    };
-    video.onerror = fail;
-  });
+      video.onloadedmetadata = () => {
+        durationSec = Math.round(video.duration) || 0;
+        // Lấy khung hình ở giây thứ 2, video ngắn hơn thì lấy giữa video
+        video.currentTime = Math.min(2, (video.duration || 1) / 2);
+      };
+      video.onseeked = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const srcW = video.videoWidth || 640;
+          const srcH = video.videoHeight || 360;
+          const scale = Math.min(1, 640 / srcW);
+          canvas.width = Math.round(srcW * scale);
+          canvas.height = Math.round(srcH * scale);
+          canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
+          resolve({ durationSec, thumbnailUri: canvas.toDataURL('image/jpeg', 0.7) });
+        } catch {
+          fail();
+        }
+      };
+      video.onerror = fail;
+    });
 
 const readPendingQueue = async (): Promise<PendingMediaQueueItem[]> => {
   try {
@@ -130,8 +133,10 @@ const writePendingQueue = async (queue: PendingMediaQueueItem[]): Promise<void> 
 };
 
 /**
- * 1. Upload ảnh nền cục bộ (file://) lên Cloud (S3/R2) 
+ * 1. Upload ảnh cục bộ (file:// hoặc data:image/...) lên Cloud (S3/R2)
  * để lấy link online (https://) chia sẻ được cho đối phương.
+ * Dùng cho hình nền và avatar. Không đưa vào hàng đợi offline: nếu upload thất bại thì ném lỗi
+ * để nơi gọi giữ lại ảnh cục bộ và thử lại ở lần lưu sau.
  */
 export const uploadHeroWallpaperToCloud = async (localUri: string): Promise<string> => {
   // Nếu đã là đường link online thì không cần upload lại
@@ -144,28 +149,33 @@ export const uploadHeroWallpaperToCloud = async (localUri: string): Promise<stri
     category: 'ALBUM_MEDIA',
     mediaType: 'IMAGE',
     caption: 'Hero Wallpaper',
+    skipOfflineQueue: true,
   });
 
   return record.remoteUrl;
 };
 
 /**
- * 2. Đẩy toàn bộ cấu hình phòng (Hình nền online, Profile 2 đứa, Ngày sinh, MoMo) lên PostgreSQL
+ * 2. Đẩy cấu hình phòng lên PostgreSQL.
+ * Backend đọc các trường ở CẤP NGOÀI của body (membersById, heroWallpaperUri, ...),
+ * nên không được chỉ gói trong `sharedSettings`.
  */
 export const pushSharedRoomSettingsToCloud = async (
-  coupleId: string,
-  settings: {
-    heroWallpaperUri?: string | null;
-    profiles?: Record<string, { nickname: string; avatarUri?: string | null; birthDate?: string | null }>;
-    anniversaryDate?: string | null;
-    momoFund?: any;
-    themePreset?: string;
-  },
+    coupleId: string,
+    settings: {
+      heroWallpaperUri?: string | null;
+      profiles?: Record<string, { nickname: string; avatarUri?: string | null; birthDate?: string | null }>;
+      anniversaryDate?: string | null;
+      momoFund?: any;
+      themePreset?: string;
+    },
 ): Promise<boolean> => {
   if (!coupleId) return false;
   try {
     await api.patch('/api/v1/couples/shared-settings', {
       coupleId,
+      ...settings,
+      membersById: settings.profiles,
       sharedSettings: settings,
       updatedAt: new Date().toISOString(),
     });
@@ -176,11 +186,11 @@ export const pushSharedRoomSettingsToCloud = async (
   }
 };
 export const enqueuePendingMediaUpload = async (
-  input: UploadMediaInput,
+    input: UploadMediaInput,
 ): Promise<PendingMediaQueueItem> => {
   const queue = await readPendingQueue();
   const idempotencyKey =
-    input.idempotencyKey || buildIdempotencyKey(input.category.toLowerCase());
+      input.idempotencyKey || buildIdempotencyKey(input.category.toLowerCase());
 
   const existing = queue.find((item) => item.idempotencyKey === idempotencyKey);
   if (existing) return existing;
@@ -198,11 +208,29 @@ export const enqueuePendingMediaUpload = async (
 };
 
 export const uploadMediaToCloudAndSaveDb = async (
-  input: UploadMediaInput,
+    input: UploadMediaInput,
 ): Promise<CloudMediaRecord> => {
   let uploadUri = input.localUri;
   let thumbnailUrl: string | undefined = undefined;
   let durationSec = input.durationSec;
+
+  // 0. Native: chuỗi Base64 (data:image/...) được ghi ra file tạm để dùng đường upload nhị phân ổn định,
+  //    thay vì phụ thuộc fetch('data:...') (không đáng tin cậy trên mọi bản React Native).
+  if (Platform.OS !== 'web' && uploadUri.startsWith('data:image')) {
+    try {
+      const base64Body = uploadUri.split(',')[1] || '';
+      if (base64Body) {
+        const baseDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory;
+        const tmpPath = `${baseDir}upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
+        await FileSystem.writeAsStringAsync(tmpPath, base64Body, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        uploadUri = tmpPath;
+      }
+    } catch (e) {
+      console.warn('Không thể ghi ảnh Base64 ra tệp tạm:', e);
+    }
+  }
 
   // 1. Nếu là VIDEO: tạo thumbnail (web dùng canvas, native dùng expo-video-thumbnails) rồi upload trước
   if (input.mediaType === 'VIDEO') {
@@ -216,9 +244,9 @@ export const uploadMediaToCloudAndSaveDb = async (
       } else {
         // Khung hình ở giây thứ 2, video ngắn hơn thì lấy giữa video
         const thumbTimeMs =
-          durationSec && durationSec > 0
-            ? Math.min(2000, Math.floor((durationSec * 1000) / 2))
-            : 2000;
+            durationSec && durationSec > 0
+                ? Math.min(2000, Math.floor((durationSec * 1000) / 2))
+                : 2000;
         const t = await VideoThumbnails.getThumbnailAsync(input.localUri, { time: thumbTimeMs });
         thumbLocalUri = t.uri;
       }
@@ -239,17 +267,17 @@ export const uploadMediaToCloudAndSaveDb = async (
 
   // 2. Nếu là IMAGE: Nén giảm kích thước ảnh xuống tối đa 1920px để tối ưu dung lượng
   if (
-    input.mediaType === 'IMAGE' &&
-    Platform.OS !== 'web' &&
-    !uploadUri.startsWith('http') &&
-    !uploadUri.startsWith('blob:') &&
-    !uploadUri.startsWith('data:')
+      input.mediaType === 'IMAGE' &&
+      Platform.OS !== 'web' &&
+      !uploadUri.startsWith('http') &&
+      !uploadUri.startsWith('blob:') &&
+      !uploadUri.startsWith('data:')
   ) {
     try {
       const manipResult = await ImageManipulator.manipulateAsync(
-        uploadUri,
-        [{ resize: { width: 1920 } }],
-        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+          uploadUri,
+          [{ resize: { width: 1920 } }],
+          { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
       );
       uploadUri = manipResult.uri;
     } catch (e) {
@@ -261,7 +289,7 @@ export const uploadMediaToCloudAndSaveDb = async (
   const ext = isVideo ? 'mp4' : 'jpg';
   const contentType = isVideo ? 'video/mp4' : 'image/jpeg';
   const idempotencyKey =
-    input.idempotencyKey || buildIdempotencyKey(input.category.toLowerCase());
+      input.idempotencyKey || buildIdempotencyKey(input.category.toLowerCase());
   const filename = `${input.category.toLowerCase()}_${Date.now()}.${ext}`;
 
   let lastError: unknown;
@@ -295,20 +323,20 @@ export const uploadMediaToCloudAndSaveDb = async (
         }
       } else {
         const uploadRes = await FileSystem.uploadAsync(
-          presigned.uploadUrl,
-          uploadUri,
-          {
-            httpMethod: 'PUT',
-            uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-            headers: {
-              'Content-Type': contentType,
+            presigned.uploadUrl,
+            uploadUri,
+            {
+              httpMethod: 'PUT',
+              uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+              headers: {
+                'Content-Type': contentType,
+              },
             },
-          },
         );
 
         if (uploadRes.status < 200 || uploadRes.status >= 300) {
           throw new Error(
-            `S3/R2 trả về mã lỗi HTTP ${uploadRes.status} khi tải tệp lên.`,
+              `S3/R2 trả về mã lỗi HTTP ${uploadRes.status} khi tải tệp lên.`,
           );
         }
       }
@@ -317,18 +345,18 @@ export const uploadMediaToCloudAndSaveDb = async (
 
       // Bước 3: Lưu remoteUrl và metadata vào PostgreSQL qua Prisma kèm idempotencyKey & thumbnailUrl
       const { data: savedRecord } = await api.post<CloudMediaRecord>(
-        '/api/v1/media/confirm',
-        {
-          category: input.category,
-          mediaType: input.mediaType,
-          fileKey: presigned.fileKey,
-          remoteUrl: finalRemoteUrl,
-          thumbnailUrl,
-          caption: input.caption || undefined,
-          stamp: input.stamp || undefined,
-          durationSec,
-          idempotencyKey,
-        },
+          '/api/v1/media/confirm',
+          {
+            category: input.category,
+            mediaType: input.mediaType,
+            fileKey: presigned.fileKey,
+            remoteUrl: finalRemoteUrl,
+            thumbnailUrl,
+            caption: input.caption || undefined,
+            stamp: input.stamp || undefined,
+            durationSec,
+            idempotencyKey,
+          },
       );
 
       return savedRecord;
@@ -340,8 +368,15 @@ export const uploadMediaToCloudAndSaveDb = async (
     }
   }
 
-  // Nếu rớt mạng hoàn toàn sau 3 lần thử, đẩy vào hàng đợi Offline để đồng bộ bù sau
-  await enqueuePendingMediaUpload({ ...input, idempotencyKey });
+  // Nếu rớt mạng hoàn toàn sau 3 lần thử, đẩy vào hàng đợi Offline để đồng bộ bù sau.
+  // Bọc try/catch: nếu hàng đợi lỗi (ví dụ localStorage đầy do chuỗi Base64) vẫn phải ném đúng lỗi gốc.
+  if (!input.skipOfflineQueue) {
+    try {
+      await enqueuePendingMediaUpload({ ...input, idempotencyKey });
+    } catch (queueError) {
+      console.warn('Không thể lưu hàng đợi upload offline:', queueError);
+    }
+  }
   throw lastError;
 };
 
@@ -388,7 +423,7 @@ export const fetchCloudWorkspaceMedia = async (limit = 150) => {
 
 export const deleteCloudMediaById = async (mediaId: string) => {
   const { data } = await api.delete<{ deleted: boolean; id: string }>(
-    `/api/v1/media/${mediaId}`,
+      `/api/v1/media/${mediaId}`,
   );
   return data;
 };
@@ -402,14 +437,14 @@ export const deleteCloudMediaById = async (mediaId: string) => {
  * Hỗ trợ gọi endpoint tổng hợp `/api/v1/couples/workspace-sync` hoặc gom từ các endpoint thành phần.
  */
 export const fetchFullCoupleRoomFromCloud = async (
-  coupleId: string,
+    coupleId: string,
 ): Promise<CoupleRoomCloudSnapshot | null> => {
   if (!coupleId) return null;
 
   try {
     const { data } = await api.get<CoupleRoomCloudSnapshot>(
-      '/api/v1/couples/workspace-sync',
-      { params: { coupleId } },
+        '/api/v1/couples/workspace-sync',
+        { params: { coupleId } },
     );
     if (data && typeof data === 'object') {
       return data;
@@ -421,24 +456,24 @@ export const fetchFullCoupleRoomFromCloud = async (
         api.get<ImportantEvent[]>('/api/v1/milestones'),
         api.get<CoupleGoalItem[]>('/api/v1/couples/goals'),
         api.get<{ dailyQA?: DailyQAItem; qaHistory?: DailyQAItem[] }>(
-          '/api/v1/daily-answers/history',
+            '/api/v1/daily-answers/history',
         ),
       ]);
 
       const events =
-        milestonesRes.status === 'fulfilled' && Array.isArray(milestonesRes.value.data)
-          ? milestonesRes.value.data
-          : [];
+          milestonesRes.status === 'fulfilled' && Array.isArray(milestonesRes.value.data)
+              ? milestonesRes.value.data
+              : [];
       const goals =
-        goalsRes.status === 'fulfilled' && Array.isArray(goalsRes.value.data)
-          ? goalsRes.value.data
-          : [];
+          goalsRes.status === 'fulfilled' && Array.isArray(goalsRes.value.data)
+              ? goalsRes.value.data
+              : [];
       const dailyQA =
-        qaRes.status === 'fulfilled' ? qaRes.value.data?.dailyQA || null : null;
+          qaRes.status === 'fulfilled' ? qaRes.value.data?.dailyQA || null : null;
       const qaHistory =
-        qaRes.status === 'fulfilled' && Array.isArray(qaRes.value.data?.qaHistory)
-          ? qaRes.value.data.qaHistory
-          : [];
+          qaRes.status === 'fulfilled' && Array.isArray(qaRes.value.data?.qaHistory)
+              ? qaRes.value.data.qaHistory
+              : [];
 
       if (events.length > 0 || goals.length > 0 || dailyQA || qaHistory.length > 0) {
         return {
@@ -462,7 +497,7 @@ export const fetchFullCoupleRoomFromCloud = async (
  * Nếu mất mạng, tự động lưu vào hàng đợi Offline để đẩy bù ngay khi có mạng.
  */
 export const pushCoupleRoomSnapshotToCloud = async (
-  snapshot: Partial<CoupleRoomCloudSnapshot> & { coupleId: string },
+    snapshot: Partial<CoupleRoomCloudSnapshot> & { coupleId: string },
 ): Promise<boolean> => {
   if (!snapshot.coupleId) return false;
 
@@ -475,11 +510,11 @@ export const pushCoupleRoomSnapshotToCloud = async (
     return true;
   } catch {
     await storage.setItem(
-      `${PENDING_WORKSPACE_SNAPSHOT_KEY}_${snapshot.coupleId}`,
-      JSON.stringify({
-        ...snapshot,
-        updatedAt: new Date().toISOString(),
-      }),
+        `${PENDING_WORKSPACE_SNAPSHOT_KEY}_${snapshot.coupleId}`,
+        JSON.stringify({
+          ...snapshot,
+          updatedAt: new Date().toISOString(),
+        }),
     );
     return false;
   }
@@ -489,7 +524,7 @@ export const pushCoupleRoomSnapshotToCloud = async (
  * Đẩy bù bản chụp dữ liệu phòng đang chờ trong hàng đợi Offline lên PostgreSQL
  */
 export const flushPendingRoomSnapshot = async (
-  coupleId?: string | null,
+    coupleId?: string | null,
 ): Promise<boolean> => {
   if (!coupleId) return false;
   try {
