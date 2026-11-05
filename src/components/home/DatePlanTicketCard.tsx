@@ -70,13 +70,13 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
         </View>
 
         <Pressable
-          style={[styles.mapShortcutBtn, { backgroundColor: '#16A34A' })}
-          onPress={() =>
-            void openAddressInGoogleMaps(
+          style={[styles.mapShortcutBtn, { backgroundColor: '#16A34A' }]}
+          onPress={() => {
+            openAddressInGoogleMaps(
               plan?.address || plan?.locationName,
-              plan?.googleMapsUrl,
-            )
-          }
+              plan?.googleMapsUrl
+            );
+          }}
         >
           <Text style={styles.mapShortcutText}>🗺️ Maps</Text>
         </Pressable>
@@ -118,7 +118,7 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
         </View>
       )}
 
-      {/* ROUTE TIMELINE SUMMARY (SƠ ĐỒ LỘ TRÌNH RÚT GỌN) */}
+      {/* ROUTE TIMELINE SUMMARY */}
       {plan?.stops && plan.stops.length > 0 && (
         <View style={styles.routeSummaryBox}>
           <Text style={[styles.metaLabel, { color: colors.textSecondary, marginBottom: 4 }]}>
