@@ -34,10 +34,17 @@ const sanitizeAvatarUri = (uri: string | null | undefined): string | null => {
   if (!uri || typeof uri !== 'string') return null;
   const trimmed = uri.trim();
   if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return null;
-  // Trên Web, link blob: từ phiên trước chắc chắn sẽ bị trắng xóa sau khi thoát ra vào lại
+  
+  // Cho phép dạng Base64 vĩnh viễn
+  if (trimmed.startsWith('data:image/')) {
+    return trimmed;
+  }
+  
+  // Loại bỏ link blob tạm thời trên Web
   if (Platform.OS === 'web' && trimmed.startsWith('blob:')) {
     return null;
   }
+  
   return trimmed;
 };
 
