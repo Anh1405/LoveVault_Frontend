@@ -15,13 +15,13 @@ import {
   ActivityIndicator,
   Image,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import { useAuthStore } from '../../../store/useAuthStore';
 import { api } from '../../../services/api';
 import { ThemeColors, ThemePreset, ColorMode } from '../../../constants/theme';
 import { useSettingsStore } from '../../../store/useSettingsStore';
 import { LocalNotificationService } from '../../../services/notification.service';
+import { pickImageAsBase64 } from '../../../utils/imageUtils';
 import {
   HEART_SKINS,
   HEART_ANIM_STYLES,
@@ -134,15 +134,20 @@ export const SettingsModal: React.FC<{
     void Haptics.selectionAsync().catch(() => {});
   };
 
+  // Đổi ảnh đại diện dùng helper pickImageAsBase64
   const handlePickMyAvatar = async () => {
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
-    if (!res.canceled && res.assets?.[0]) {
-      await updateProfiles({ avatarUri: res.assets[0].uri });
+    const base64Uri = await pickImageAsBase64(400);
+
+    if (base64Uri) {
+      await updateProfiles({ avatarUri: base64Uri });
+      
+      // Đồng bộ vĩnh viễn lên Server
+      api.patch('/api/v1/couples/shared-settings', {
+        membersById: {
+          [user?.id || 'me']: { avatarUri: base64Uri, updatedAt: new Date().toISOString() }
+        }
+      }).catch(() => null);
+
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
   };
@@ -212,14 +217,18 @@ export const SettingsModal: React.FC<{
     Alert.alert('Đã lưu cấu hình MoMo', 'Thông tin Quỹ chung MoMo của phòng đã được cập nhật.');
   };
 
+  // Đổi hình nền dùng helper pickImageAsBase64
   const pickWallpaper = async () => {
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      quality: 0.85,
-    });
-    if (!res.canceled && res.assets?.[0]) {
-      await updateAppearance({ heroWallpaperUri: res.assets[0].uri });
+    const base64Uri = await pickImageAsBase64(1080);
+
+    if (base64Uri) {
+      // 1. Cập nhật giao diện local
+      await updateAppearance({ heroWallpaperUri: base64Uri });
+
+      // 2. Đồng bộ vĩnh viễn lên Server
+      await api.patch('/api/v1/couples/shared-settings', {
+        heroWallpaperUri: base64Uri,
+      }).catch(() => null);
     }
   };
 

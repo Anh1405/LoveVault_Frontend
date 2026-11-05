@@ -62,6 +62,16 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
   const [chamberParticles, setChamberParticles] = useState<ChamberParticle[]>([]);
   const [comboCount, setComboCount] = useState<number>(0);
 
+  // State quản lý lỗi hiển thị ảnh
+  const [myAvatarError, setMyAvatarError] = useState(false);
+  const [partnerAvatarError, setPartnerAvatarError] = useState(false);
+  const [wallpaperError, setWallpaperError] = useState(false);
+
+  // Reset trạng thái lỗi khi URI thay đổi
+  useEffect(() => { setMyAvatarError(false); }, [myProfile.avatarUri]);
+  useEffect(() => { setPartnerAvatarError(false); }, [partnerProfile.avatarUri]);
+  useEffect(() => { setWallpaperError(false); }, [heroWallpaperUri]);
+
   const heartPulse = useRef(new Animated.Value(1)).current;
   const chamberScale = useRef(new Animated.Value(1)).current;
   const comboResetTimer = useRef<NodeJS.Timeout | null>(null);
@@ -229,7 +239,7 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
     };
   }, [anniversaryIso, nowTick, countFromOne]);
 
-  const hasWallpaper = Boolean(heroWallpaperUri);
+  const hasWallpaper = Boolean(heroWallpaperUri) && !wallpaperError;
   const primaryTextColor = hasWallpaper ? '#FFFFFF' : colors.textPrimary;
   const secondaryTextColor = hasWallpaper ? 'rgba(255,255,255,0.78)' : colors.textSecondary;
 
@@ -245,8 +255,12 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
                 { borderColor: colors.borderSubtle, backgroundColor: colors.surfaceVariant },
               ]}
             >
-              {myProfile.avatarUri ? (
-                <Image source={{ uri: myProfile.avatarUri }} style={styles.avatarImage} />
+              {myProfile.avatarUri && !myAvatarError ? (
+                <Image
+                  source={{ uri: myProfile.avatarUri }}
+                  style={styles.avatarImage}
+                  onError={() => setMyAvatarError(true)}
+                />
               ) : (
                 <Text style={[styles.avatarInitial, { color: colors.textPrimary }]}>
                   {myProfile.nickname.slice(0, 1).toUpperCase()}
@@ -340,8 +354,12 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
                 { borderColor: colors.borderSubtle, backgroundColor: colors.surfaceVariant },
               ]}
             >
-              {partnerProfile.avatarUri ? (
-                <Image source={{ uri: partnerProfile.avatarUri }} style={styles.avatarImage} />
+              {partnerProfile.avatarUri && !partnerAvatarError ? (
+                <Image
+                  source={{ uri: partnerProfile.avatarUri }}
+                  style={styles.avatarImage}
+                  onError={() => setPartnerAvatarError(true)}
+                />
               ) : (
                 <Text style={[styles.avatarInitial, { color: colors.textPrimary }]}>
                   {partnerProfile.nickname.slice(0, 1).toUpperCase()}
@@ -480,6 +498,7 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
         source={{ uri: heroWallpaperUri }}
         style={[styles.cardShell, { borderColor: colors.borderSubtle }]}
         imageStyle={{ borderRadius: METRICS.radiusLg }}
+        onError={() => setWallpaperError(true)}
       >
         {renderCardInner()}
       </ImageBackground>
@@ -524,7 +543,7 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around',
+    justify.content: 'space-around',
     marginBottom: 14,
   },
   personCol: { alignItems: 'center', width: 88 },
