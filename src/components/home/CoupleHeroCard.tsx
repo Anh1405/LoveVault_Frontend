@@ -543,7 +543,7 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    justify.content: 'space-around',
+    justifyContent: 'space-around', // ĐÃ SỬA LỖI TẠI ĐÂY (dòng 546)
     marginBottom: 14,
   },
   personCol: { alignItems: 'center', width: 88 },
