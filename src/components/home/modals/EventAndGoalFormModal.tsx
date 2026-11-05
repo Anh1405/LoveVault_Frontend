@@ -17,7 +17,7 @@ import { DateTimeField } from './DateTimeField';
 import * as Haptics from 'expo-haptics';
 import { ThemeColors } from '../../../constants/theme';
 import { useSettingsStore } from '../../../store/useSettingsStore';
-import { LocalNotificationService, AiToneStyle } from '../../../services/notification.service';
+import { AiToneStyle } from '../../../services/notification.service';
 import {
   ImportantEvent,
   CoupleGoalItem,
@@ -39,6 +39,15 @@ import {
   hmToMinutes,
 } from './modalConstantsAndUtils';
 import { styles } from './modalSharedStyles';
+
+// Alert.alert của React Native không hiển thị gì trên web, nên dùng window.alert ở đó.
+const showAlert = (title: string, message: string) => {
+  if (Platform.OS === 'web') {
+    window.alert(`${title}\n\n${message}`);
+  } else {
+    Alert.alert(title, message);
+  }
+};
 
 export const EventAndGoalFormModal: React.FC<{
   visible: boolean;
@@ -67,7 +76,7 @@ export const EventAndGoalFormModal: React.FC<{
   onSaveEvent,
   onSaveGoal,
 }) => {
-  const { momoFund, notificationPrefs, partnerProfile } = useSettingsStore();
+  const { momoFund } = useSettingsStore();
   const isMomoGlobalEnabled = (momoFund as any)?.enabled !== false;
 
   const [title, setTitle] = useState('');
@@ -242,7 +251,7 @@ export const EventAndGoalFormModal: React.FC<{
   // Thêm điểm dừng và tự động sắp xếp theo thứ tự thời gian tăng dần
   const handleAddStop = () => {
     if (!stopTitle.trim()) {
-      Alert.alert('Thiếu thông tin', 'Vui lòng nhập tên quán hoặc hoạt động của chặng này.');
+      showAlert('Thiếu thông tin', 'Vui lòng nhập tên quán hoặc hoạt động của chặng này.');
       return;
     }
 
@@ -251,7 +260,7 @@ export const EventAndGoalFormModal: React.FC<{
     const startMins = hmToMinutes(toHmString(selectedTime));
 
     if (newStopMins <= startMins) {
-      Alert.alert(
+      showAlert(
         'Thời gian chưa hợp lý',
         `Giờ của chặng (${newStopHm}) cần diễn ra sau giờ bắt đầu hẹn (${toHmString(selectedTime)}).`,
       );
@@ -259,7 +268,7 @@ export const EventAndGoalFormModal: React.FC<{
     }
 
     if (enableEndTime && newStopMins >= hmToMinutes(toHmString(endTimeDate))) {
-      Alert.alert(
+      showAlert(
         'Thời gian chưa hợp lý',
         `Giờ của chặng (${newStopHm}) cần diễn ra trước giờ về dự kiến (${toHmString(endTimeDate)}). Bạn có thể chỉnh tăng giờ về hoặc tắt giới hạn giờ về.`,
       );
@@ -292,37 +301,11 @@ export const EventAndGoalFormModal: React.FC<{
     void Haptics.selectionAsync().catch(() => {});
   };
 
-  // Lập lịch thông báo cục bộ cho Giờ hẹn & Giờ về
-  const scheduleDatePlanNotificationsIfNeeded = async (
-    planTitle: string,
-    dateIso: string,
-    startHm: string,
-    endHm: string | undefined,
-  ) => {
-    if (!notificationPrefs.masterEnabled) return;
-    try {
-      const svc = LocalNotificationService as any;
-      if (typeof svc.scheduleDatePlanReminders === 'function') {
-        await svc.scheduleDatePlanReminders({
-          title: planTitle,
-          dateIso,
-          startTimeHm: startHm,
-          endTimeHm: endHm,
-          notifyStartTime,
-          startRemindMinutesBefore,
-          notifyEndTime: enableEndTime && notifyEndTime,
-          partnerNickname: partnerProfile.nickname,
-        });
-      }
-    } catch {
-      // Giữ an toàn luồng lưu dữ liệu nếu thiết bị chưa cấp quyền thông báo
-    }
-  };
-
+  // Việc lên lịch thông báo đã được saveEvent xử lý, không lên lịch lại ở đây để tránh trùng.
   const handleSubmit = async () => {
     const cleanTitle = title.trim();
     if (!cleanTitle) {
-      Alert.alert(
+      showAlert(
         'Thiếu tiêu đề',
         mode === 'EVENT' && category === 'DATE_PLAN'
           ? 'Vui lòng nhập tên buổi đi chơi (VD: Hẹn hò tối thứ 7).'
@@ -344,7 +327,7 @@ export const EventAndGoalFormModal: React.FC<{
       if (hmToMinutes(endTimeHm) <= lastMins) {
         const lastLabel =
           stops.length > 0 ? `chặng cuối (${stops[stops.length - 1].timeHm})` : `giờ hẹn (${startTimeHm})`;
-        Alert.alert(
+        showAlert(
           'Giờ về chưa hợp lệ',
           `Giờ về dự kiến (${endTimeHm}) phải diễn ra sau ${lastLabel}. Nếu chưa xác định giờ về, bạn có thể gạt tắt mục Giờ về dự kiến.`,
         );
@@ -398,15 +381,6 @@ export const EventAndGoalFormModal: React.FC<{
           },
           editingEvent?.id,
         );
-
-        if (isDatePlan) {
-          await scheduleDatePlanNotificationsIfNeeded(
-            cleanTitle,
-            dateIso,
-            startTimeHm,
-            endTimeHm,
-          );
-        }
       } else {
         const useMomo = isMomoGlobalEnabled && isMomoLinked;
         await onSaveGoal(
@@ -426,6 +400,12 @@ export const EventAndGoalFormModal: React.FC<{
         );
       }
       onClose();
+    } catch (e) {
+      console.error('Lưu thất bại:', e);
+      showAlert(
+        'Không lưu được',
+        e instanceof Error && e.message ? e.message : 'Đã có lỗi xảy ra, bạn thử lại nhé.',
+      );
     } finally {
       setSubmitting(false);
     }

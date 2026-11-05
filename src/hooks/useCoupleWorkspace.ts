@@ -1122,6 +1122,17 @@ const QUESTION_BANK: Array<{
 
 const COUPLE_ROOM_POLL_MS = 4000;
 
+// Thông báo cục bộ không chạy được trên web (và có thể lỗi khi chưa cấp quyền).
+// Bọc lại để lỗi thông báo không bao giờ chặn việc lưu dữ liệu.
+const safeNotif = async <T,>(fn: () => Promise<T>, fallback: T): Promise<T> => {
+  if (Platform.OS === 'web') return fallback;
+  try {
+    return await fn();
+  } catch {
+    return fallback;
+  }
+};
+
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 const buildWorkspaceKeys = (coupleId?: string | null, userId?: string | null) => {
@@ -1739,15 +1750,19 @@ export function useCoupleWorkspace() {
 
         await LocalNotificationService.cancelReminder(ev.id).catch(() => null);
 
-        const notifId = await LocalNotificationService.scheduleCustomReminder({
-          sourceId: ev.id,
-          category: ev.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
-          title: `${ev.category === 'BIRTHDAY' ? '🎂 Sinh nhật' : '💍 Kỷ niệm'}: ${ev.title}`,
-          body: freshAiMessage,
-          eventDateIso: ev.eventDate,
-          daysBefore: ev.notifyDaysBefore,
-          timeHm: ev.notifyAtTime,
-        });
+        const notifId = await safeNotif(
+          () =>
+            LocalNotificationService.scheduleCustomReminder({
+              sourceId: ev.id,
+              category: ev.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
+              title: `${ev.category === 'BIRTHDAY' ? '🎂 Sinh nhật' : '💍 Kỷ niệm'}: ${ev.title}`,
+              body: freshAiMessage,
+              eventDateIso: ev.eventDate,
+              daysBefore: ev.notifyDaysBefore,
+              timeHm: ev.notifyAtTime,
+            }),
+          null as string | null,
+        );
 
         updatedMap.set(ev.id, { msg: freshAiMessage, notifId });
       }
@@ -2273,18 +2288,23 @@ export function useCoupleWorkspace() {
       let finalMessage = payload.customMessage.trim();
       if (payload.category !== 'DATE_PLAN' && (!finalMessage || payload.autoDailyAi !== false)) {
         const daysLeft = computeDaysUntilNextOccurrence(payload.eventDate);
-        finalMessage = await generateUniqueAiReminder({
-          eventId: targetId,
-          title: payload.title,
-          category: payload.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
-          daysUntilEvent: daysLeft,
-          partnerName: partnerProfile.nickname,
-          tone: payload.aiTone || 'FUNNY',
-          previousMessage: payload.customMessage,
-        });
+        try {
+          finalMessage = await generateUniqueAiReminder({
+            eventId: targetId,
+            title: payload.title,
+            category: payload.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
+            daysUntilEvent: daysLeft,
+            partnerName: partnerProfile.nickname,
+            tone: payload.aiTone || 'FUNNY',
+            previousMessage: payload.customMessage,
+          });
+        } catch {
+          // AI lỗi/offline thì dùng lời nhắc mặc định, vẫn phải lưu được sự kiện
+          finalMessage = payload.customMessage.trim() || `Sắp đến ${payload.title} rồi nhé!`;
+        }
       }
 
-      await LocalNotificationService.cancelReminder(targetId).catch(() => null);
+      await safeNotif(() => LocalNotificationService.cancelReminder(targetId), undefined);
 
       let notifId: string | null = null;
       let updatedDatePlan: DatePlanDetails | null = payload.datePlan || null;
@@ -2318,41 +2338,51 @@ export function useCoupleWorkspace() {
 
         const hasEndTime = dp.enableEndTime !== false && Boolean(dp.endTimeHm);
 
-        const scheduledIds = await LocalNotificationService.scheduleDatePlanReminders({
-          sourceId: targetId,
-          title: payload.title,
-          dateIso: payload.eventDate,
-          startTimeHm: dp.startTimeHm || payload.notifyAtTime,
-          endTimeHm: hasEndTime ? dp.endTimeHm : undefined,
-          notifyStartTime: dp.notifyStartTime ?? true,
-          startRemindMinutesBefore:
-            typeof dp.startRemindMinutesBefore === 'number' ? dp.startRemindMinutesBefore : 30,
-          notifyEndTime: hasEndTime ? Boolean(dp.notifyEndTime) : false,
-          partnerNickname: partnerProfile.nickname,
-          locationName: dp.locationName,
-        });
+        const scheduledIds = await safeNotif(
+          () =>
+            LocalNotificationService.scheduleDatePlanReminders({
+              sourceId: targetId,
+              title: payload.title,
+              dateIso: payload.eventDate,
+              startTimeHm: dp.startTimeHm || payload.notifyAtTime,
+              endTimeHm: hasEndTime ? dp.endTimeHm : undefined,
+              notifyStartTime: dp.notifyStartTime ?? true,
+              startRemindMinutesBefore:
+                typeof dp.startRemindMinutesBefore === 'number'
+                  ? dp.startRemindMinutesBefore
+                  : 30,
+              notifyEndTime: hasEndTime ? Boolean(dp.notifyEndTime) : false,
+              partnerNickname: partnerProfile.nickname,
+              locationName: dp.locationName,
+            }),
+          { startNotificationId: null, endNotificationId: null } as any,
+        );
 
-        notifId = scheduledIds.startNotificationId;
+        notifId = scheduledIds?.startNotificationId ?? null;
         updatedDatePlan = {
           ...dp,
           endTimeHm: hasEndTime ? dp.endTimeHm : undefined,
           enableEndTime: hasEndTime,
           notifyEndTime: hasEndTime ? Boolean(dp.notifyEndTime) : false,
-          endNotificationId: scheduledIds.endNotificationId,
+          endNotificationId: scheduledIds?.endNotificationId ?? null,
         };
       } else {
         const notifTitlePrefix =
           payload.category === 'BIRTHDAY' ? '🎂 Sinh nhật' : '💍 Kỷ niệm';
 
-        notifId = await LocalNotificationService.scheduleCustomReminder({
-          sourceId: targetId,
-          category: payload.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
-          title: `${notifTitlePrefix}: ${payload.title}`,
-          body: finalMessage || `Hẹn lúc ${payload.notifyAtTime} ngày ${payload.eventDate}`,
-          eventDateIso: payload.eventDate,
-          daysBefore: payload.notifyDaysBefore,
-          timeHm: payload.notifyAtTime,
-        });
+        notifId = await safeNotif(
+          () =>
+            LocalNotificationService.scheduleCustomReminder({
+              sourceId: targetId,
+              category: payload.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
+              title: `${notifTitlePrefix}: ${payload.title}`,
+              body: finalMessage || `Hẹn lúc ${payload.notifyAtTime} ngày ${payload.eventDate}`,
+              eventDateIso: payload.eventDate,
+              daysBefore: payload.notifyDaysBefore,
+              timeHm: payload.notifyAtTime,
+            }),
+          null as string | null,
+        );
       }
 
       let syncStatus: SyncStatus = 'PENDING_SYNC';
@@ -2431,15 +2461,19 @@ export function useCoupleWorkspace() {
 
       const notifId = isAlreadyDone
         ? null
-        : await LocalNotificationService.scheduleCustomReminder({
-            sourceId: targetId,
-            category: 'GOAL',
-            title: `🎯 Mục tiêu cặp đôi: ${payload.title}`,
-            body: payload.customNotifyMessage,
-            eventDateIso: payload.targetDate,
-            daysBefore: 0,
-            timeHm: payload.notifyTime,
-          });
+        : await safeNotif(
+            () =>
+              LocalNotificationService.scheduleCustomReminder({
+                sourceId: targetId,
+                category: 'GOAL',
+                title: `🎯 Mục tiêu cặp đôi: ${payload.title}`,
+                body: payload.customNotifyMessage,
+                eventDateIso: payload.targetDate,
+                daysBefore: 0,
+                timeHm: payload.notifyTime,
+              }),
+            null as string | null,
+          );
 
       let syncStatus: SyncStatus = 'PENDING_SYNC';
       try {
@@ -2615,7 +2649,6 @@ export function useCoupleWorkspace() {
           category: 'ALBUM_MEDIA',
           mediaType: type,
           caption: captionText,
-          stamp: albumCategory || undefined,
           durationSec,
           idempotencyKey: itemId,
         });

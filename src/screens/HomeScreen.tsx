@@ -1,5 +1,7 @@
 // src/screens/HomeScreen.tsx
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { RedesignedAlbumSection } from '../components/home/RedesignedAlbumSection';
+import { DatePlanTicketCard } from '../components/home/DatePlanTicketCard';
 import {
   View,
   Text,
@@ -97,7 +99,6 @@ const COUPLE_LOCKET_STAMPS: LocketStampItem[] = [
 
 const PAGE_LABELS = ['Locket', 'Không gian'] as const;
 const PAGE_SWITCH_PADDING = 3;
-const MEDIA_PAGE_SIZE = 12;
 
 const locketSnapKeyExtractor = (snap: { id: string }) => snap.id;
 
@@ -174,94 +175,6 @@ const InlineVideoPlayer: React.FC<{ uri: string }> = ({ uri }) => {
   );
 };
 
-const formatDuration = (sec: number): string => {
-  const total = Math.max(0, Math.round(sec));
-  const m = Math.floor(total / 60);
-  const r = total % 60;
-  return m > 0 ? `${m}:${String(r).padStart(2, '0')}` : `${r}s`;
-};
-
-const MediaCardItem = React.memo(({
-  item,
-  colors,
-  onSelect,
-}: {
-  item: AlbumMediaWithCategory;
-  colors: ThemeColors;
-  onSelect: (item: AlbumMediaWithCategory) => void;
-}) => {
-  const effectiveUri = item.remoteUrl || item.uri;
-  const isVideo = item.mediaType === 'VIDEO';
-  const hasThumb = Boolean(item.thumbnailUri);
-  const [webDuration, setWebDuration] = useState<number>(0);
-
-  // Video cũ chưa có thumbnail: trên web dùng chính thẻ <video> để hiện khung hình ở giây thứ 2
-  const useWebVideoPoster = isVideo && !hasThumb && Platform.OS === 'web';
-  const displayUri = isVideo ? item.thumbnailUri || effectiveUri : effectiveUri;
-  const duration = item.durationSec && item.durationSec > 0 ? item.durationSec : webDuration;
-
-  return (
-    <Pressable
-      style={[styles.mediaCard, { backgroundColor: colors.mediaCardBg }]}
-      onPress={() => onSelect(item)}
-    >
-      {useWebVideoPoster ? (
-        React.createElement('video', {
-          src: `${effectiveUri}#t=2`,
-          preload: 'metadata',
-          muted: true,
-          playsInline: true,
-          onLoadedMetadata: (e: any) => {
-            const d = Math.round(e?.currentTarget?.duration || 0);
-            if (d > 0) setWebDuration(d);
-          },
-          style: {
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-            pointerEvents: 'none',
-          },
-        })
-      ) : (
-        <ExpoImage
-          source={{ uri: displayUri }}
-          style={styles.mediaThumbImage}
-          contentFit="cover"
-          allowDownscaling={false}
-          transition={200}
-          cachePolicy="memory-disk"
-        />
-      )}
-
-      {Boolean(item.albumCategory) && (
-        <View style={styles.mediaCategoryBadge} pointerEvents="none">
-          <Text style={styles.mediaCategoryBadgeText} numberOfLines={1}>
-            📁 {item.albumCategory}
-          </Text>
-        </View>
-      )}
-
-      {isVideo && (
-        <View style={styles.videoOverlayContainer} pointerEvents="none">
-          <View style={[styles.playCircle, { backgroundColor: colors.primary }]}>
-            <Text style={{ color: '#FFF', fontSize: 14 }}>▶</Text>
-          </View>
-          {duration > 0 && <Text style={styles.durationTag}>{formatDuration(duration)}</Text>}
-        </View>
-      )}
-
-      <View style={styles.mediaFooterOverlay}>
-        <Text style={styles.mediaCaption} numberOfLines={1}>
-          {item.caption}
-        </Text>
-        <Text style={styles.mediaDate}>{item.createdAt}</Text>
-      </View>
-    </Pressable>
-  );
-});
 
 export const HomeScreen = () => {
   const insets = useSafeAreaInsets();
@@ -594,11 +507,7 @@ export const HomeScreen = () => {
 
   const [eventFilter, setEventFilter] = useState<'ALL' | 'DATE_PLAN' | 'MILESTONE'>('ALL');
   const [mediaFilter, setMediaFilter] = useState<'ALL' | 'IMAGE' | 'VIDEO'>('ALL');
-  const [mediaVisibleCount, setMediaVisibleCount] = useState(MEDIA_PAGE_SIZE);
 
-  useEffect(() => {
-    setMediaVisibleCount(MEDIA_PAGE_SIZE);
-  }, [mediaFilter, selectedAlbumCategory]);
 
   const filteredEvents = React.useMemo(() => {
     if (eventFilter === 'DATE_PLAN') {
@@ -610,18 +519,6 @@ export const HomeScreen = () => {
     return events;
   }, [events, eventFilter]);
 
-  const filteredMediaList = React.useMemo(() => {
-    return mergedMediaList.filter((m) => {
-      const matchType = mediaFilter === 'ALL' ? true : m.mediaType === mediaFilter;
-      const matchCategory =
-        selectedAlbumCategory === 'ALL'
-          ? true
-          : selectedAlbumCategory === 'UNCATEGORIZED'
-            ? !m.albumCategory
-            : m.albumCategory === selectedAlbumCategory;
-      return matchType && matchCategory;
-    });
-  }, [mergedMediaList, mediaFilter, selectedAlbumCategory]);
 
   const horizontalPagerRef = useRef<ScrollView | null>(null);
   const [currentPage, setCurrentPage] = useState<0 | 1>(0);
@@ -1742,375 +1639,91 @@ export const HomeScreen = () => {
                   </View>
                 ) : (
                   filteredEvents.map((item) => {
-                    const isDatePlan = item.category === 'DATE_PLAN';
-                    const daysLeft = computeDaysUntilNextOccurrence(
-                      item.eventDate,
-                      !isDatePlan,
-                    );
-                    const isTestingThis = testingAiEventId === item.id;
-                    const plan = item.datePlan;
+  const isDatePlan = item.category === 'DATE_PLAN';
 
-                    const activityMeta = plan
-                      ? DATE_ACTIVITY_OPTIONS.find((a) => a.id === plan.activityType)
-                      : null;
-                    const transportMeta = plan
-                      ? TRANSPORT_OPTIONS.find((t) => t.id === plan.transport)
-                      : null;
+  if (isDatePlan) {
+    return (
+      <DatePlanTicketCard
+        key={item.id}
+        item={item}
+        colors={colors}
+        onEdit={(editedItem) =>
+          setFormModal({
+            visible: true,
+            mode: 'EVENT',
+            initialEventCategory: 'DATE_PLAN',
+            editingEvent: editedItem,
+          })
+        }
+        onDelete={(id) => deleteEvent(id)}
+      />
+    );
+  }
 
-                    return (
-                      <Pressable
-                        key={item.id}
-                        style={[
-                          styles.itemCard,
-                          {
-                            backgroundColor: colors.surface,
-                            borderColor: isDatePlan ? colors.primary : colors.borderSubtle,
-                          },
-                        ]}
-                        onPress={() =>
-                          setFormModal({
-                            visible: true,
-                            mode: 'EVENT',
-                            initialEventCategory: isDatePlan ? 'DATE_PLAN' : 'ANNIVERSARY',
-                            editingEvent: item,
-                          })
-                        }
-                      >
-                        <View style={styles.eventMainRow}>
-                          <View style={{ flex: 1, flexShrink: 1, paddingRight: 10, minWidth: 0 }}>
-                            <Text
-                              style={[styles.cardMainTitle, { color: colors.textPrimary }]}
-                              numberOfLines={2}
-                            >
-                              {isDatePlan ? '🥂 ' : item.category === 'BIRTHDAY' ? '🎂 ' : '💍 '}
-                              {item.title}
-                            </Text>
-                            <Text
-                              style={{ fontSize: 12, color: colors.textSecondary, marginTop: 3 }}
-                              numberOfLines={1}
-                            >
-                              📅 {item.eventDate}  •  ⏰{' '}
-                              {isDatePlan && plan?.endTimeHm
-                                ? `${item.notifyAtTime} - ${plan.endTimeHm}`
-                                : `Nhắc lúc ${item.notifyAtTime}`}
-                            </Text>
-                          </View>
+  // Giữ nguyên giao diện card cho Kỷ niệm & Sinh nhật
+  const daysLeft = computeDaysUntilNextOccurrence(item.eventDate, true);
+  const isTestingThis = testingAiEventId === item.id;
 
-                          <View
-                            style={[
-                              styles.daysLeftBadge,
-                              {
-                                backgroundColor: colors.primaryContainer,
-                                flexShrink: 0,
-                                alignSelf: 'flex-start',
-                              },
-                            ]}
-                          >
-                            <Text
-                              style={{
-                                fontSize: 13,
-                                fontWeight: '800',
-                                color: colors.onPrimaryContainer,
-                              }}
-                              numberOfLines={1}
-                            >
-                              {daysLeft === 0 ? 'Hôm nay' : `${daysLeft} ngày`}
-                            </Text>
-                          </View>
-                        </View>
+  return (
+    <Pressable
+      key={item.id}
+      style={[
+        styles.itemCard,
+        { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
+      ]}
+      onPress={() =>
+        setFormModal({
+          visible: true,
+          mode: 'EVENT',
+          initialEventCategory: item.category as any,
+          editingEvent: item,
+        })
+      }
+    >
+      <View style={styles.eventMainRow}>
+        <View style={{ flex: 1, paddingRight: 10 }}>
+          <Text style={[styles.cardMainTitle, { color: colors.textPrimary }]}>
+            {item.category === 'BIRTHDAY' ? '🎂 ' : '💍 '}
+            {item.title}
+          </Text>
+          <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 3 }}>
+            📅 {item.eventDate}  •  ⏰ Nhắc lúc {item.notifyAtTime}
+          </Text>
+        </View>
 
-                        {isDatePlan && plan && (
-                          <View
-                            style={{
-                              marginTop: 10,
-                              padding: 12,
-                              borderRadius: 12,
-                              backgroundColor: colors.surfaceVariant,
-                              gap: 8,
-                            }}
-                          >
-                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-                              {activityMeta && (
-                                <View
-                                  style={{
-                                    backgroundColor: colors.surface,
-                                    paddingHorizontal: 9,
-                                    paddingVertical: 5,
-                                    borderRadius: 8,
-                                    maxWidth: '100%',
-                                  }}
-                                >
-                                  <Text
-                                    style={{ fontSize: 11, fontWeight: '700', color: colors.primary }}
-                                    numberOfLines={1}
-                                  >
-                                    {activityMeta.icon} {activityMeta.label}
-                                  </Text>
-                                </View>
-                              )}
-                              {transportMeta && (
-                                <View
-                                  style={{
-                                    backgroundColor: colors.surface,
-                                    paddingHorizontal: 9,
-                                    paddingVertical: 5,
-                                    borderRadius: 8,
-                                    maxWidth: '100%',
-                                  }}
-                                >
-                                  <Text
-                                    style={{
-                                      fontSize: 11,
-                                      fontWeight: '700',
-                                      color: colors.textPrimary,
-                                    }}
-                                    numberOfLines={1}
-                                  >
-                                    {transportMeta.icon} {transportMeta.label}
-                                  </Text>
-                                </View>
-                              )}
-                              {Boolean(plan.estimatedBudget) && (
-                                <View
-                                  style={{
-                                    backgroundColor: colors.surface,
-                                    paddingHorizontal: 9,
-                                    paddingVertical: 5,
-                                    borderRadius: 8,
-                                  }}
-                                >
-                                  <Text
-                                    style={{ fontSize: 11, fontWeight: '700', color: '#15803D' }}
-                                    numberOfLines={1}
-                                  >
-                                    💰 ~{plan.estimatedBudget?.toLocaleString('vi-VN')}đ
-                                  </Text>
-                                </View>
-                              )}
-                            </View>
+        <View style={[styles.daysLeftBadge, { backgroundColor: colors.primaryContainer }]}>
+          <Text style={{ fontSize: 13, fontWeight: '800', color: colors.onPrimaryContainer }}>
+            {daysLeft === 0 ? 'Hôm nay' : `${daysLeft} ngày`}
+          </Text>
+        </View>
+      </View>
 
-                            {Boolean(plan.transportNote) && (
-                              <Text
-                                style={{ fontSize: 12, color: colors.textPrimary, lineHeight: 18 }}
-                                numberOfLines={2}
-                              >
-                                🛵 Đưa đón: {plan.transportNote}
-                              </Text>
-                            )}
+      {Boolean(item.customMessage) && (
+        <Text style={[styles.subtleReminderNote, { color: colors.textSecondary, borderTopColor: colors.borderSubtle }]}>
+          {item.customMessage}
+        </Text>
+      )}
 
-                            {(Boolean(plan.locationName) ||
-                              Boolean(plan.address) ||
-                              Boolean(plan.googleMapsUrl)) && (
-                              <View
-                                style={{
-                                  flexDirection: 'row',
-                                  alignItems: 'flex-start',
-                                  marginTop: 2,
-                                  paddingTop: 8,
-                                  borderTopWidth: StyleSheet.hairlineWidth,
-                                  borderTopColor: colors.borderSubtle,
-                                  gap: 10,
-                                }}
-                              >
-                                <View style={{ flex: 1, flexShrink: 1, minWidth: 0 }}>
-                                  {Boolean(plan.locationName) && (
-                                    <Text
-                                      style={{
-                                        fontSize: 13,
-                                        fontWeight: '700',
-                                        color: colors.textPrimary,
-                                        lineHeight: 18,
-                                      }}
-                                      numberOfLines={2}
-                                    >
-                                      📍 {plan.locationName}
-                                    </Text>
-                                  )}
-                                  {Boolean(plan.address) && (
-                                    <Text
-                                      style={{
-                                        fontSize: 12,
-                                        color: colors.textSecondary,
-                                        marginTop: 2,
-                                        lineHeight: 17,
-                                      }}
-                                      numberOfLines={2}
-                                    >
-                                      {plan.address}
-                                    </Text>
-                                  )}
-                                </View>
-
-                                <Pressable
-                                  hitSlop={6}
-                                  style={{
-                                    backgroundColor: '#16A34A',
-                                    paddingHorizontal: 10,
-                                    paddingVertical: 8,
-                                    borderRadius: 10,
-                                    minHeight: 36,
-                                    justifyContent: 'center',
-                                    flexShrink: 0,
-                                  }}
-                                  onPress={() =>
-                                    void openAddressInGoogleMaps(
-                                      plan.address || plan.locationName,
-                                      plan.googleMapsUrl,
-                                    )
-                                  }
-                                >
-                                  <Text
-                                    style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '700' }}
-                                    numberOfLines={1}
-                                  >
-                                    🗺️ Chỉ đường
-                                  </Text>
-                                </Pressable>
-                              </View>
-                            )}
-
-                            {plan.stops && plan.stops.length > 0 && (
-                              <View
-                                style={{
-                                  marginTop: 2,
-                                  paddingTop: 8,
-                                  borderTopWidth: StyleSheet.hairlineWidth,
-                                  borderTopColor: colors.borderSubtle,
-                                  gap: 6,
-                                }}
-                              >
-                                <Text
-                                  style={{
-                                    fontSize: 11,
-                                    fontWeight: '700',
-                                    color: colors.textSecondary,
-                                  }}
-                                >
-                                  Lịch trình các chặng:
-                                </Text>
-                                {plan.stops.map((st, idx) => (
-                                  <View
-                                    key={st.id}
-                                    style={{
-                                      flexDirection: 'row',
-                                      alignItems: 'flex-start',
-                                      gap: 8,
-                                    }}
-                                  >
-                                    <Text
-                                      style={{
-                                        fontSize: 12,
-                                        color: colors.textPrimary,
-                                        flex: 1,
-                                        flexShrink: 1,
-                                        minWidth: 0,
-                                        lineHeight: 17,
-                                      }}
-                                      numberOfLines={2}
-                                    >
-                                      • {st.timeHm} · Chặng {idx + 1}: {st.title}
-                                      {st.address ? ` (${st.address})` : ''}
-                                    </Text>
-                                    {Boolean(st.address) && (
-                                      <Pressable
-                                        hitSlop={8}
-                                        onPress={() => void openAddressInGoogleMaps(st.address)}
-                                        style={{
-                                          marginTop: 1,
-                                          paddingVertical: 2,
-                                          paddingHorizontal: 4,
-                                          flexShrink: 0,
-                                        }}
-                                      >
-                                        <Text
-                                          style={{
-                                            fontSize: 11,
-                                            fontWeight: '700',
-                                            color: '#16A34A',
-                                          }}
-                                        >
-                                          Map ▸
-                                        </Text>
-                                      </Pressable>
-                                    )}
-                                  </View>
-                                ))}
-                              </View>
-                            )}
-                          </View>
-                        )}
-
-                        {Boolean(item.customMessage) && !isDatePlan && (
-                          <Text
-                            style={[
-                              styles.subtleReminderNote,
-                              {
-                                color: colors.textSecondary,
-                                borderTopColor: colors.borderSubtle,
-                              },
-                            ]}
-                            numberOfLines={4}
-                          >
-                            {item.customMessage}
-                          </Text>
-                        )}
-
-                        <View style={styles.cardBottomActions}>
-                          <Text
-                            style={{
-                              fontSize: 11,
-                              color: colors.textSecondary,
-                              flexShrink: 1,
-                              marginRight: 8,
-                            }}
-                            numberOfLines={1}
-                          >
-                            {isDatePlan
-                              ? 'Kế hoạch hẹn hò đi chơi'
-                              : item.category === 'BIRTHDAY'
-                                ? 'Sinh nhật hàng năm'
-                                : 'Kỷ niệm'}
-                          </Text>
-
-                          <View style={styles.eventActionBtnGroup}>
-                            {!isDatePlan && (
-                              <Pressable
-                                hitSlop={10}
-                                disabled={isTestingThis}
-                                onPress={() => void handleTestAiOnEvent(item)}
-                              >
-                                {isTestingThis ? (
-                                  <ActivityIndicator size="small" color={colors.primary} />
-                                ) : (
-                                  <Text
-                                    style={{
-                                      color: colors.primary,
-                                      fontSize: 12,
-                                      fontWeight: '600',
-                                    }}
-                                  >
-                                    Thử lời nhắc AI
-                                  </Text>
-                                )}
-                              </Pressable>
-                            )}
-
-                            <Pressable hitSlop={10} onPress={() => deleteEvent(item.id)}>
-                              <Text
-                                style={{
-                                  color: colors.error,
-                                  fontSize: 12,
-                                  fontWeight: '600',
-                                }}
-                              >
-                                Xóa
-                              </Text>
-                            </Pressable>
-                          </View>
-                        </View>
-                      </Pressable>
-                    );
-                  })
+      <View style={styles.cardBottomActions}>
+        <Text style={{ fontSize: 11, color: colors.textSecondary }}>
+          {item.category === 'BIRTHDAY' ? 'Sinh nhật hàng năm' : 'Kỷ niệm'}
+        </Text>
+        <View style={styles.eventActionBtnGroup}>
+          <Pressable hitSlop={10} disabled={isTestingThis} onPress={() => void handleTestAiOnEvent(item)}>
+            {isTestingThis ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '600' }}>Thử lời nhắc AI</Text>
+            )}
+          </Pressable>
+          <Pressable hitSlop={10} onPress={() => deleteEvent(item.id)}>
+            <Text style={{ color: colors.error, fontSize: 12, fontWeight: '600' }}>Xóa</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Pressable>
+  );
+})
                 )}
               </View>
             )}
@@ -2734,277 +2347,21 @@ export const HomeScreen = () => {
 
             {/* TAB 4: ALBUM ẢNH & VIDEO CÓ DANH MỤC & NÚT THÊM NHANH */}
             {activeTab === 'MEDIA' && (
-              <View style={styles.sectionWrap}>
-                <View style={styles.sectionHeaderRow}>
-                  <View style={{ flex: 1, paddingRight: 8 }}>
-                    <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
-                      Kho lưu trữ ({filteredMediaList.length})
-                    </Text>
-                    <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 2 }}>
-                      {selectedAlbumCategory === 'ALL'
-                        ? 'Đang xem tất cả danh mục • Nhấn giữ danh mục để xóa'
-                        : selectedAlbumCategory === 'UNCATEGORIZED'
-                          ? 'Các ảnh & video chưa phân loại'
-                          : `Đang mở danh mục: 📁 ${selectedAlbumCategory}`}
-                    </Text>
-                  </View>
-
-                  <View style={styles.mediaButtonGroup}>
-                    <Pressable
-                      style={[
-                        styles.addBtn,
-                        { backgroundColor: colors.primaryContainer, paddingHorizontal: 12 },
-                      ]}
-                      onPress={() => setCreateCategoryModalVisible(true)}
-                    >
-                      <Text
-                        style={{
-                          color: colors.onPrimaryContainer,
-                          fontSize: 12,
-                          fontWeight: '700',
-                        }}
-                      >
-                        📁 + Tạo danh mục
-                      </Text>
-                    </Pressable>
-                  </View>
-                </View>
-
-                {/* THANH NÚT THÊM ẢNH / VIDEO NHANH */}
-                <View style={styles.quickUploadBar}>
-                  <Pressable
-                    style={[
-                      styles.quickUploadBtnOutline,
-                      {
-                        backgroundColor: colors.surface,
-                        borderColor: colors.primary,
-                        opacity: uploadingMedia ? 0.6 : 1,
-                      },
-                    ]}
-                    onPress={() => void handlePickAndSaveAlbumMedia('IMAGE')}
-                    disabled={uploadingMedia}
-                  >
-                    <Text style={{ fontSize: 15 }}>📸</Text>
-                    <Text
-                      style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }}
-                      numberOfLines={1}
-                    >
-                      {uploadingMedia
-                        ? 'Đang tải...'
-                        : selectedAlbumCategory !== 'ALL' &&
-                            selectedAlbumCategory !== 'UNCATEGORIZED'
-                          ? `+ Ảnh vào "${selectedAlbumCategory}"`
-                          : '+ Thêm ảnh nhanh'}
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    style={[
-                      styles.quickUploadBtnPrimary,
-                      {
-                        backgroundColor: colors.primary,
-                        opacity: uploadingMedia ? 0.6 : 1,
-                      },
-                    ]}
-                    onPress={() => void handlePickAndSaveAlbumMedia('VIDEO')}
-                    disabled={uploadingMedia}
-                  >
-                    <Text style={{ fontSize: 15 }}>🎬</Text>
-                    <Text
-                      style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}
-                      numberOfLines={1}
-                    >
-                      {uploadingMedia
-                        ? 'Đang tải...'
-                        : selectedAlbumCategory !== 'ALL' &&
-                            selectedAlbumCategory !== 'UNCATEGORIZED'
-                          ? `+ Video vào "${selectedAlbumCategory}"`
-                          : '+ Thêm video nhanh'}
-                    </Text>
-                  </Pressable>
-                </View>
-
-                {/* DANH SÁCH DANH MỤC ALBUM (FOLDERS) */}
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.folderScrollContainer}
-                >
-                  {[
-                    {
-                      key: 'ALL',
-                      label: `🗂️ Tất cả (${mergedMediaList.length})`,
-                    },
-                    ...albumCategories.map((cat) => ({
-                      key: cat,
-                      label: `📁 ${cat} (${
-                        mergedMediaList.filter((m) => m.albumCategory === cat).length
-                      })`,
-                    })),
-                    {
-                      key: 'UNCATEGORIZED',
-                      label: `📌 Chưa phân loại (${
-                        mergedMediaList.filter((m) => !m.albumCategory).length
-                      })`,
-                    },
-                  ].map((folder) => {
-                    const active = selectedAlbumCategory === folder.key;
-                    const isCustomFolder =
-                      folder.key !== 'ALL' && folder.key !== 'UNCATEGORIZED';
-                    return (
-                      <Pressable
-                        key={folder.key}
-                        style={[
-                          styles.mediaFilterChip,
-                          {
-                            backgroundColor: active ? colors.textPrimary : colors.surface,
-                            borderWidth: 1,
-                            borderColor: active ? colors.textPrimary : colors.borderSubtle,
-                            paddingVertical: 7,
-                            paddingHorizontal: 13,
-                          },
-                        ]}
-                        onPress={() => setSelectedAlbumCategory(folder.key)}
-                        onLongPress={() => {
-                          if (isCustomFolder) {
-                            handleDeleteAlbumCategory(folder.key);
-                          }
-                        }}
-                      >
-                        <Text
-                          style={{
-                            fontSize: 12,
-                            fontWeight: '700',
-                            color: active ? colors.surface : colors.textPrimary,
-                          }}
-                        >
-                          {folder.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-
-                {/* BỘ LỌC ĐỊNH DẠNG: TẤT CẢ / ẢNH / VIDEO */}
-                <View style={styles.mediaFilterRow}>
-                  {(
-                    [
-                      { key: 'ALL', label: `Mọi định dạng` },
-                      {
-                        key: 'IMAGE',
-                        label: `🖼️ Chỉ Ảnh (${
-                          filteredMediaList.filter((m) => m.mediaType === 'IMAGE').length
-                        })`,
-                      },
-                      {
-                        key: 'VIDEO',
-                        label: `🎥 Chỉ Video (${
-                          filteredMediaList.filter((m) => m.mediaType === 'VIDEO').length
-                        })`,
-                      },
-                    ] as const
-                  ).map((f) => {
-                    const active = mediaFilter === f.key;
-                    return (
-                      <Pressable
-                        key={f.key}
-                        style={[
-                          styles.mediaFilterChip,
-                          { backgroundColor: active ? colors.primary : colors.surfaceVariant },
-                        ]}
-                        onPress={() => setMediaFilter(f.key)}
-                      >
-                        <Text
-                          style={{
-                            fontSize: 12,
-                            fontWeight: '600',
-                            color: active ? '#FFFFFF' : colors.textSecondary,
-                          }}
-                        >
-                          {f.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-
-                {filteredMediaList.length === 0 ? (
-                  <View
-                    style={[
-                      styles.emptyCard,
-                      { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
-                    ]}
-                  >
-                    <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>
-                      Chưa có ảnh/video trong mục này
-                    </Text>
-                    <Text
-                      style={{
-                        color: colors.textSecondary,
-                        fontSize: 13,
-                        textAlign: 'center',
-                        marginBottom: 12,
-                      }}
-                    >
-                      Bấm nút bên dưới để thêm nhanh khoảnh khắc vào{' '}
-                      {selectedAlbumCategory !== 'ALL' &&
-                      selectedAlbumCategory !== 'UNCATEGORIZED'
-                        ? `danh mục "${selectedAlbumCategory}"`
-                        : 'Album của hai bạn'}
-                      .
-                    </Text>
-                    <View style={{ flexDirection: 'row', gap: 8 }}>
-                      <Pressable
-                        style={[styles.addBtn, { backgroundColor: colors.primary }]}
-                        onPress={() => void handlePickAndSaveAlbumMedia('IMAGE')}
-                        disabled={uploadingMedia}
-                      >
-                        <Text style={styles.addBtnText}>+ Thêm ảnh ngay</Text>
-                      </Pressable>
-                      <Pressable
-                        style={[styles.addBtn, { backgroundColor: colors.surfaceVariant }]}
-                        onPress={() => void handlePickAndSaveAlbumMedia('VIDEO')}
-                        disabled={uploadingMedia}
-                      >
-                        <Text
-                          style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '700' }}
-                        >
-                          + Thêm video
-                        </Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                ) : (
-                  <View>
-                    <View style={styles.mediaGrid}>
-                      {filteredMediaList.slice(0, mediaVisibleCount).map((item) => (
-                        <MediaCardItem
-                          key={item.id}
-                          item={item}
-                          colors={colors}
-                          onSelect={setSelectedMedia}
-                        />
-                      ))}
-                    </View>
-                    {filteredMediaList.length > mediaVisibleCount && (
-                      <Pressable
-                        style={[
-                          styles.mediaLoadMoreBtn,
-                          { backgroundColor: colors.surfaceVariant },
-                        ]}
-                        onPress={() => setMediaVisibleCount((c) => c + MEDIA_PAGE_SIZE)}
-                      >
-                        <Text
-                          style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '600' }}
-                        >
-                          Xem thêm ({filteredMediaList.length - mediaVisibleCount})
-                        </Text>
-                      </Pressable>
-                    )}
-                  </View>
-                )}
-              </View>
-            )}
+  <RedesignedAlbumSection
+    colors={colors}
+    mediaList={mergedMediaList}
+    categories={albumCategories}
+    selectedCategory={selectedAlbumCategory}
+    mediaFilter={mediaFilter}
+    uploading={uploadingMedia}
+    onSelectCategory={setSelectedAlbumCategory}
+    onChangeFilter={setMediaFilter}
+    onCreateCategory={() => setCreateCategoryModalVisible(true)}
+    onPickMedia={(type) => void handlePickAndSaveAlbumMedia(type)}
+    onOpenMedia={setSelectedMedia}
+    onDeleteCategory={handleDeleteAlbumCategory}
+  />
+)}
           </ScrollView>
         </View>
       </Animated.ScrollView>
@@ -3662,53 +3019,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 14,
   },
-  mediaCard: {
-    width: '48%',
-    height: 156,
-    borderRadius: METRICS.radiusMd,
-    marginBottom: 14,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  mediaThumbImage: {
-    ...StyleSheet.absoluteFillObject,
-    width: '100%',
-    height: '100%',
-  },
-  mediaCategoryBadge: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    maxWidth: '82%',
-    backgroundColor: 'rgba(15, 23, 42, 0.72)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  mediaCategoryBadgeText: {
-    color: '#F8FAFC',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  playCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  durationTag: { color: '#FFF', fontSize: 11, marginTop: 4, fontWeight: '600' },
-  mediaFooterOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(15, 23, 42, 0.65)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  mediaCaption: { color: '#FFF', fontSize: 12, fontWeight: '600' },
-  mediaDate: { color: '#CBD5E1', fontSize: 10, marginTop: 1 },
   iosSheetBackdrop: { flex: 1, justifyContent: 'flex-end' },
   iosSheetBox: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 24 },
   iosSheetHeader: {
@@ -3730,18 +3040,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#000000',
   },
-  mediaGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  mediaLoadMoreBtn: {
-    alignSelf: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 16,
-    marginTop: 4,
-  },
   mediaFilterRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -3752,11 +3050,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 14,
-  },
-  videoOverlayContainer: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.2)',
   },
 });
