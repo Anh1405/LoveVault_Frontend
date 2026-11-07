@@ -236,8 +236,6 @@ export const HomeScreen = () => {
     locketSnaps,
     uploadingMedia,
     dailyQA,
-    qaFilter,
-    qaHistory,
     saveEvent,
     deleteEvent,
     saveGoal,
