@@ -24,10 +24,12 @@ const SOCKET_BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
 const sameSnapList = (a: LocketSnapView[], b: LocketSnapView[]) => {
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
+        const reactionsA = Array.isArray(a[i]?.reactions) ? a[i].reactions : [];
+        const reactionsB = Array.isArray(b[i]?.reactions) ? b[i].reactions : [];
         if (
             a[i].id !== b[i].id ||
             a[i].uri !== b[i].uri ||
-            a[i].reactions.length !== b[i].reactions.length
+            reactionsA.length !== reactionsB.length
         ) {
             return false;
         }
@@ -64,7 +66,6 @@ export function useRealtimeLocket() {
     const snapsRef = useRef<LocketSnapView[]>(locketSnaps);
     snapsRef.current = locketSnaps;
 
-    // Giữ danh sách các ID vừa bị xóa trong 15 giây để chặn mọi request cũ ghi đè lại
     const deletedIdsTombstoneRef = useRef<Set<string>>(new Set());
     const mutationInFlightRef = useRef<number>(0);
     const socketRef = useRef<Socket | null>(null);
@@ -98,7 +99,6 @@ export function useRealtimeLocket() {
         [currentUserId, myProfile.nickname, partnerProfile.nickname],
     );
 
-    // Kéo danh sách Locket mới nhất từ PostgreSQL
     const syncLocketsFromCloud = useCallback(
         async (silent = false) => {
             if (mutationInFlightRef.current > 0) return;
@@ -109,7 +109,7 @@ export function useRealtimeLocket() {
                     try {
                         const parsed = JSON.parse(rawCache);
                         if (Array.isArray(parsed)) {
-                            consthydrated = parsed.map(mapCloudSnapToView);
+                            const hydrated = parsed.map(mapCloudSnapToView);
                             setLocketSnaps(hydrated);
                             prevTopSnapIdRef.current = hydrated[0]?.id || null;
                         }
@@ -131,7 +131,6 @@ export function useRealtimeLocket() {
                 const workspaceData = await fetchCloudWorkspaceMedia(150);
                 setLocketLive(true);
 
-                // Cập nhật luôn React Query cache để Album bên tab Không gian cũng đồng bộ
                 if (targetCoupleId) {
                     queryClient.setQueryData(
                         ['cloudWorkspaceMedia', targetCoupleId, currentUserId],
@@ -156,7 +155,6 @@ export function useRealtimeLocket() {
                     cloudMapped.map((s: any) => s.remoteUrl || s.uri),
                 );
 
-                // Chỉ giữ lại các ảnh vừa chụp trên máy đang trong quá trình đẩy lên S3 (`locket_...`)
                 const pendingLocalOnly = snapsRef.current.filter(
                     (loc: any) =>
                         String(loc.id).startsWith('locket_') &&
@@ -166,10 +164,8 @@ export function useRealtimeLocket() {
                         !deletedIdsTombstoneRef.current.has(loc.id),
                 );
 
-                // QUAN TRỌNG: Không chặn `rawCloudSnaps.length > 0` nữa, nếu xóa hết trên DB thì trả về mảng rỗng chuẩn xác
                 const nextSnaps = [...pendingLocalOnly, ...cloudMapped];
 
-                // Rung nhẹ báo hiệu nếu đối phương vừa đăng ảnh Locket mới lên đầu danh sách
                 const newestSnap = nextSnaps[0];
                 if (
                     newestSnap &&
@@ -194,7 +190,6 @@ export function useRealtimeLocket() {
         [resolvedCoupleId, currentUserId, cacheKey, queryClient, mapCloudSnapToView],
     );
 
-    // Mở kết nối Socket.IO + Vòng lặp Fast-Sync 2 giây
     useEffect(() => {
         void syncLocketsFromCloud(false);
 
@@ -223,7 +218,6 @@ export function useRealtimeLocket() {
                 if (isMounted) setLocketLive(true);
             });
 
-            // 1. Nhận tức thì ảnh Locket mới khi đối phương vừa chụp xong
             socket.on('locket:snap_created', (incomingSnap: any) => {
                 if (!isMounted || !incomingSnap?.id) return;
                 const formatted = mapCloudSnapToView(incomingSnap);
@@ -237,7 +231,6 @@ export function useRealtimeLocket() {
                 });
             });
 
-            // 2. Xóa tức thì trên màn hình khi đối phương bấm xóa ảnh của họ
             socket.on(
                 'locket:snap_deleted',
                 (payload: { snapId: string; remoteUrl?: string }) => {
@@ -259,7 +252,7 @@ export function useRealtimeLocket() {
                 },
             );
 
-            // 3. Nhảy emoji cảm xúc tức thì khi đối phương bấm thả cảm xúc
+            // Cập nhật cảm xúc Realtime từ đối phương an toàn
             socket.on(
                 'locket:snap_reacted',
                 (payload: { snapId: string; userId: string; emoji: string; reactions?: any[] }) => {
@@ -269,10 +262,11 @@ export function useRealtimeLocket() {
                     setLocketSnaps((prev) => {
                         const next = prev.map((s) => {
                             if (s.id !== payload.snapId) return s;
+                            const currentReactions = Array.isArray(s.reactions) ? s.reactions : [];
                             const updatedReactions = Array.isArray(payload.reactions)
                                 ? payload.reactions
                                 : [
-                                    ...s.reactions,
+                                    ...currentReactions,
                                     {
                                         id: `${payload.userId}_${Date.now()}`,
                                         userId: payload.userId,
@@ -291,7 +285,6 @@ export function useRealtimeLocket() {
 
         void connectSocket();
 
-        // Fast-Sync mỗi 2 giây để đồng bộ tức thì kể cả khi chỉ chạy qua REST API trên Render
         const pollTimer = setInterval(() => {
             if (AppState.currentState === 'active') {
                 void syncLocketsFromCloud(true);
@@ -316,7 +309,6 @@ export function useRealtimeLocket() {
         };
     }, [cacheKey, syncLocketsFromCloud, mapCloudSnapToView]);
 
-    // Hàm đẩy ảnh Locket từ URI (Camera trực tiếp hoặc Thư viện) lên S3 + PostgreSQL + Phát WebSocket
     const uploadAndBroadcastSnap = useCallback(
         async (localUri: string, stampBadge: string, captionText: string) => {
             const finalStamp = stampBadge || '💕 Đang nhớ đằng ấy';
@@ -367,7 +359,6 @@ export function useRealtimeLocket() {
                     return next;
                 });
 
-                // Phát WebSocket báo ngay cho máy đối phương hiển thị ảnh mới
                 if (socketRef.current?.connected) {
                     socketRef.current.emit('locket:new_snap', confirmedSnap);
                 }
@@ -380,7 +371,6 @@ export function useRealtimeLocket() {
         [currentUserId, cacheKey, mapCloudSnapToView],
     );
 
-    // Chụp từ khung ngắm LocketCameraCard
     const captureFromCameraCard = useCallback(
         async (uri: string, stamp: string, caption: string) => {
             await uploadAndBroadcastSnap(uri, stamp, caption);
@@ -388,7 +378,6 @@ export function useRealtimeLocket() {
         [uploadAndBroadcastSnap],
     );
 
-    // Chọn ảnh từ thư viện gửi vào Locket
     const pickLocketFromGallery = useCallback(
         async (stamp: string, caption: string) => {
             const libPerm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -417,7 +406,6 @@ export function useRealtimeLocket() {
         [socialPrefs.hdMediaUpload, uploadAndBroadcastSnap],
     );
 
-    // Xóa Locket: Xóa ngay trên UI + Khóa Tombstone + Xóa trong PostgreSQL & S3 + Báo sang máy đối phương
     const deleteSnapRealtime = useCallback(
         async (snapId: string) => {
             const target = snapsRef.current.find((s) => s.id === snapId) as any;
@@ -453,7 +441,7 @@ export function useRealtimeLocket() {
         [cacheKey],
     );
 
-    // Thả cảm xúc Locket: Nhảy số tức thì trên cả 2 máy và lưu vào cột `reactions` trong PostgreSQL
+    // THẢ CẢM XÚC AN TOÀN (CHỐNG CRASH MÀN HÌNH TRẮNG)
     const reactSnapRealtime = useCallback(
         async (snapId: string, emoji: string) => {
             void Haptics.selectionAsync().catch(() => null);
@@ -468,12 +456,17 @@ export function useRealtimeLocket() {
             setLocketSnaps((prev) => {
                 const next = prev.map((s) => {
                     if (s.id !== snapId) return s;
-                    const filtered = s.reactions.filter(
-                        (r: any) =>
-                            typeof r === 'string' ||
-                            r.userId !== currentUserId ||
-                            r.emoji !== emoji,
-                    );
+
+                    // 1. Đảm bảo s.reactions luôn là mảng hợp lệ
+                    const currentReactions = Array.isArray(s.reactions) ? s.reactions : [];
+
+                    // 2. Lọc an toàn chống null / undefined / sai kiểu dữ liệu
+                    const filtered = currentReactions.filter((r: any) => {
+                        if (!r) return false;
+                        if (typeof r === 'string') return true;
+                        return String(r.userId) !== String(currentUserId) || r.emoji !== emoji;
+                    });
+
                     return { ...s, reactions: [...filtered, newReactionObj] };
                 });
                 void storage.setItem(cacheKey, JSON.stringify(next));
