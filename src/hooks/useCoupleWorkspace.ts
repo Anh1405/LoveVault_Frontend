@@ -1431,7 +1431,7 @@ export function useCoupleWorkspace() {
         const norm = normalizeAiBody(body);
         if (!norm) return;
         if (!recentAiBodiesRef.current) {
-          const recentAiBodiesRef = useRef<Map<string, string[]>>(new Map());
+          recentAiBodiesRef.current = new Map();
         }
         const prev = recentAiBodiesRef.current.get(eventId) || [];
         const next = [norm, ...prev.filter((h) => h !== norm)].slice(0, 5);
@@ -1721,7 +1721,7 @@ export function useCoupleWorkspace() {
 
       setEvents(parsedEvents);
       if (!recentAiBodiesRef.current) {
-        recentAiBodiesRef.current = new Map();
+        const recentAiBodiesRef = useRef<Map<string, string[]>>(new Map());
       }
       parsedEvents.forEach((ev) => {
         if (ev.customMessage && ev.category !== 'DATE_PLAN') {
