@@ -1,5 +1,6 @@
 // src/screens/HomeScreen.tsx
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useRealtimeLocket } from '../hooks/useRealtimeLocket';
 import { RedesignedAlbumSection } from '../components/home/RedesignedAlbumSection';
 import { DatePlanTicketCard } from '../components/home/DatePlanTicketCard';
 import { useRealtimeDailyQA } from '../hooks/useRealtimeDailyQA';
@@ -204,7 +205,6 @@ export const HomeScreen = () => {
     momoFund,
     recordMomoContribution,
   } = useSettingsStore();
-
   const anniversaryCacheKey = React.useMemo(
     () => getAnniversaryCacheKey(coupleId, currentUserId),
     [coupleId, currentUserId],
@@ -233,7 +233,6 @@ export const HomeScreen = () => {
     events,
     goals,
     mediaList,
-    locketSnaps,
     uploadingMedia,
     dailyQA,
     saveEvent,
@@ -243,13 +242,9 @@ export const HomeScreen = () => {
     deleteGoal,
     pickAndSaveMedia,
     deleteMedia,
-    captureCoupleLocket,
-    reactToLocketSnap,
-    deleteLocketSnap,
     submitDailyAnswer,
     rollRandomQuestion,
     retryPendingSync,
-    saveCapturedLocketUri,
     forceTestGeminiOnEvent,
     recordGoalMomoTransaction,
     restoreWorkspaceBackup,
@@ -268,6 +263,15 @@ export const HomeScreen = () => {
     selectQuestionFromHistory,
     refreshQa,
   } = useRealtimeDailyQA();
+  const {
+    locketSnaps: mergedLocketSnaps,
+    locketLive,
+    captureFromCameraCard: handleCapturePhotoUri,
+    pickLocketFromGallery: handlePickFromGallery,
+    deleteSnapRealtime: handleDeleteLocketSnap,
+    reactSnapRealtime: handleReactLocketSnap,
+    refreshLockets,
+  } = useRealtimeLocket();
   // State quản lý Danh mục Album (Folders)
   const [albumCategories, setAlbumCategories] = useState<string[]>([
     'Kỷ niệm hẹn hò',
@@ -447,42 +451,6 @@ export const HomeScreen = () => {
     return [...cloudItems, ...localOnly];
   }, [cloudMediaPayload?.albumMedia, mediaList, itemCategoryMap]);
 
-  const mergedLocketSnaps = React.useMemo<LocketSnapView[]>(() => {
-    const cloudSnaps: LocketSnapView[] = (cloudMediaPayload?.locketSnaps || []).map(
-      (s) =>
-        ({
-          id: s.id,
-          uri: s.remoteUrl,
-          remoteUrl: s.remoteUrl,
-          ownerId: s.uploaderId,
-          senderId: s.uploaderId,
-          senderName:
-            String(s.uploaderId) === String(currentUserId)
-              ? myProfile.nickname
-              : partnerProfile.nickname,
-          stampBadge: s.stamp || '💕 Đang nhớ đằng ấy',
-          caption: s.caption || '',
-          createdAtTime: new Date(s.createdAt).toLocaleString('vi-VN'),
-          reactions: Array.isArray(s.reactions) ? s.reactions : [],
-        }) as unknown as LocketSnapView,
-    );
-
-    if (cloudSnaps.length === 0) return locketSnaps;
-
-    const seenUrls = new Set(cloudSnaps.map((i: any) => i.remoteUrl || i.uri));
-    const seenIds = new Set(cloudSnaps.map((i) => i.id));
-    const localOnly = locketSnaps.filter(
-      (loc: any) => !seenIds.has(loc.id) && !seenUrls.has(loc.remoteUrl || loc.uri),
-    );
-    return [...cloudSnaps, ...localOnly];
-  }, [
-    cloudMediaPayload?.locketSnaps,
-    locketSnaps,
-    currentUserId,
-    myProfile.nickname,
-    partnerProfile.nickname,
-  ]);
-
   // Lưu bản sao từ Cloud xuống Local Storage để xem ngoại tuyến khi mất mạng
   useEffect(() => {
     if (!cloudMediaPayload || uploadingMedia) return;
@@ -497,7 +465,6 @@ export const HomeScreen = () => {
     ) {
       void restoreWorkspaceBackup({
         mediaList: mergedMediaList,
-        locketSnaps: mergedLocketSnaps,
       });
     }
   }, [
@@ -895,6 +862,7 @@ export const HomeScreen = () => {
         refetch(),
         refetchCloudMedia(),
         retryPendingSync(),
+        refreshLockets(),
         syncCoupleStatusFromServer(),
         pullSharedRoomSettingsFromServer(),
       ]);
@@ -1037,29 +1005,7 @@ export const HomeScreen = () => {
   }, []);
 
   // Chụp Locket: lưu Local trước để hiển thị tức thì, sau đó đẩy thẳng lên S3/R2 + PostgreSQL
-const handleCapturePhotoUri = useCallback(
-    async (uri: string, stamp: string, cap: string) => {
-      await saveCapturedLocketUri(uri, stamp, cap);
-      if (coupleId) {
-        await queryClient.invalidateQueries({
-          queryKey: ['cloudWorkspaceMedia', coupleId],
-        });
-      }
-    },
-    [saveCapturedLocketUri, coupleId, queryClient],
-  );
 
-  const handlePickFromGallery = useCallback(
-    async (stamp: string, cap: string) => {
-      await captureCoupleLocket('GALLERY', stamp, cap);
-      if (coupleId) {
-        void queryClient.invalidateQueries({
-          queryKey: ['cloudWorkspaceMedia', coupleId],
-        });
-      }
-    },
-    [captureCoupleLocket, coupleId, queryClient],
-  );
 
   // Thêm nhanh ảnh/video vào đúng Danh mục đang chọn
   const handlePickAndSaveAlbumMedia = useCallback(
@@ -1114,58 +1060,6 @@ const handleCapturePhotoUri = useCallback(
 
   // Xóa Locket ở cả Local + Cache + Supabase Database & S3 Storage
   // 2. Sửa handleDeleteLocketSnap (khoảng dòng 705) - XÓA lệnh gọi deleteCloudMediaById bị trùng lần 2:
-  const handleDeleteLocketSnap = useCallback(
-    async (id: string) => {
-      const targetSnap = mergedLocketSnaps.find((s) => s.id === id);
-
-      // 1. Xóa khỏi React Query Cache ngay lập tức
-      queryClient.setQueryData(
-        ['cloudWorkspaceMedia', coupleId, currentUserId],
-        (oldData: any) => {
-          if (!oldData) return oldData;
-          return {
-            ...oldData,
-            locketSnaps: Array.isArray(oldData.locketSnaps)
-              ? oldData.locketSnaps.filter(
-                  (s: any) =>
-                    s.id !== id &&
-                    (!targetSnap?.remoteUrl || s.remoteUrl !== targetSnap.remoteUrl),
-                )
-              : [],
-          };
-        },
-      );
-
-      // 2. Cập nhật lại bản backup Local
-      const updatedSnaps = mergedLocketSnaps.filter((s) => s.id !== id);
-      void restoreWorkspaceBackup({
-        mediaList: mergedMediaList,
-        locketSnaps: updatedSnaps,
-      });
-
-      // 3. Gọi deleteLocketSnap (hàm này đã bao gồm xóa Local + gọi API xóa Database PostgreSQL & S3)
-      try {
-        await deleteLocketSnap(id);
-        if (coupleId) {
-          await queryClient.invalidateQueries({
-            queryKey: ['cloudWorkspaceMedia', coupleId],
-          });
-        }
-      } catch (err) {
-        console.warn('Không thể xóa Locket trên Cloud:', err);
-        Alert.alert('Lỗi xóa ảnh', 'Chưa xóa được ảnh trên Database, vui lòng thử lại.');
-      }
-    },
-    [
-      mergedLocketSnaps,
-      mergedMediaList,
-      deleteLocketSnap,
-      queryClient,
-      coupleId,
-      currentUserId,
-      restoreWorkspaceBackup,
-    ],
-  );
 
   // 3. Tương tự cho handleDeleteAlbumMedia (khoảng dòng 750) - Tránh gọi deleteCloudMediaById 2 lần:
   const handleDeleteAlbumMedia = useCallback(
@@ -1192,7 +1086,6 @@ const handleCapturePhotoUri = useCallback(
       const updatedMedia = mergedMediaList.filter((m) => m.id !== id);
       void restoreWorkspaceBackup({
         mediaList: updatedMedia,
-        locketSnaps: mergedLocketSnaps,
       });
 
       try {
@@ -1217,23 +1110,6 @@ const handleCapturePhotoUri = useCallback(
     ],
   );
 
-  const handleReactLocketSnap = useCallback(
-    (id: string, emoji: string) => {
-      void Haptics.selectionAsync().catch(() => {});
-      void reactToLocketSnap(id, emoji);
-      if (coupleId) {
-        api
-          .post(`/api/v1/media/${id}/reactions`, { emoji })
-          .then(() => {
-            void queryClient.invalidateQueries({
-              queryKey: ['cloudWorkspaceMedia', coupleId],
-            });
-          })
-          .catch(() => null);
-      }
-    },
-    [reactToLocketSnap, coupleId, queryClient],
-  );
 
   const reactionSnap = React.useMemo(
     () => mergedLocketSnaps.find((s) => s.id === reactionSnapId) ?? null,
@@ -1456,6 +1332,25 @@ const handleCapturePhotoUri = useCallback(
                   <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
                     Nhật ký Locket ({mergedLocketSnaps.length})
                   </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <View
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 4,
+                          backgroundColor: locketLive ? '#10B981' : '#F59E0B',
+                        }}
+                    />
+                    <Text
+                        style={{
+                          fontSize: 12,
+                          fontWeight: '700',
+                          color: colors.textSecondary,
+                        }}
+                    >
+                      {locketLive ? 'Đồng bộ tức thì (Live)' : 'Đang kết nối...'}
+                    </Text>
+                  </View>
                 </View>
               </View>
             }
