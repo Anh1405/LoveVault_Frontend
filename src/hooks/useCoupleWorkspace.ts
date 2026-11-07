@@ -2381,7 +2381,7 @@ export function useCoupleWorkspace() {
         const picked = finalPool[Math.floor(Math.random() * finalPool.length)];
 
         const safeQaHistory = Array.isArray(qaHistory) ? qaHistory : [];
-        const existingAnswered = safeQaHistory.find((h) => h.questionId === picked.id);
+        const existingAnswered = safeQaHistory.find((h) => h?.questionId === picked.id);
         const nextQA: DailyQAItem = existingAnswered || {
           questionId: picked.id,
           category: picked.category,
@@ -2494,6 +2494,7 @@ export function useCoupleWorkspace() {
         let updatedDatePlan: DatePlanDetails | null = payload.datePlan || null;
 
         if (payload.category === 'DATE_PLAN' && payload.datePlan) {
+          const safeStops = Array.isArray(payload.datePlan.stops) ? payload.datePlan.stops : [];
           let dp = payload.datePlan;
 
           if (
