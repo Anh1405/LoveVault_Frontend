@@ -4,11 +4,10 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { ThemeColors } from '../../constants/theme';
 import {
   ImportantEvent,
-  DATE_ACTIVITY_OPTIONS,
-  TRANSPORT_OPTIONS,
   openAddressInGoogleMaps,
   computeDaysUntilNextOccurrence,
 } from '../../hooks/useCoupleWorkspace';
+import { DATE_ACTIVITY_OPTIONS, TRANSPORT_OPTIONS } from './modals/modalConstantsAndUtils';
 
 interface DatePlanTicketCardProps {
   item: ImportantEvent;
