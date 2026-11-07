@@ -13,6 +13,7 @@ import { RegisterScreen } from './src/screens/RegisterScreen';
 import { ForgotPasswordScreen } from './src/screens/ForgotPasswordScreen';
 import { PairingScreen } from './src/screens/PairingScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
+import { ScreenErrorBoundary } from './src/components/ScreenErrorBoundary';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -24,6 +25,13 @@ export type RootStackParamList = {
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const queryClient = new QueryClient();
+
+// Bọc HomeScreen để lỗi runtime hiện thông báo thay vì màn hình trắng
+const HomeScreenSafe = () => (
+    <ScreenErrorBoundary>
+      <HomeScreen />
+    </ScreenErrorBoundary>
+);
 
 export default function App() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -41,41 +49,41 @@ export default function App() {
   // Hiển thị Splash Indicator trong lúc nạp Token từ bộ nhớ đĩa
   if (isLoading) {
     return (
-      <View
-        style={{
-          flex: 1,
-          justifyContent: 'center',
-          alignItems: 'center',
-          backgroundColor: '#FFF5F5',
-        }}
-      >
-        <ActivityIndicator size="large" color="#E53E3E" />
-      </View>
+        <View
+            style={{
+              flex: 1,
+              justifyContent: 'center',
+              alignItems: 'center',
+              backgroundColor: '#FFF5F5',
+            }}
+        >
+          <ActivityIndicator size="large" color="#E53E3E" />
+        </View>
     );
   }
 
   const isPaired = Boolean(coupleId || user?.coupleId || user?.couple_id);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <SafeAreaProvider>
-        <StatusBar style="auto" />
-        <NavigationContainer>
-          <Stack.Navigator screenOptions={{ headerShown: false }}>
-            {!isAuthenticated ? (
-              <>
-                <Stack.Screen name="Login" component={LoginScreen} />
-                <Stack.Screen name="Register" component={RegisterScreen} />
-                <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
-              </>
-            ) : !isPaired ? (
-              <Stack.Screen name="Pairing" component={PairingScreen} />
-            ) : (
-              <Stack.Screen name="Home" component={HomeScreen} />
-            )}
-          </Stack.Navigator>
-        </NavigationContainer>
-      </SafeAreaProvider>
-    </QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        <SafeAreaProvider>
+          <StatusBar style="auto" />
+          <NavigationContainer>
+            <Stack.Navigator screenOptions={{ headerShown: false }}>
+              {!isAuthenticated ? (
+                  <>
+                    <Stack.Screen name="Login" component={LoginScreen} />
+                    <Stack.Screen name="Register" component={RegisterScreen} />
+                    <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+                  </>
+              ) : !isPaired ? (
+                  <Stack.Screen name="Pairing" component={PairingScreen} />
+              ) : (
+                  <Stack.Screen name="Home" component={HomeScreenSafe} />
+              )}
+            </Stack.Navigator>
+          </NavigationContainer>
+        </SafeAreaProvider>
+      </QueryClientProvider>
   );
 }
