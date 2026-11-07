@@ -84,9 +84,9 @@ export class CloudMediaUploadError extends Error {
   causeError?: unknown;
 
   constructor(
-    message: string,
-    code: 'VIDEO_TOO_LARGE' | 'S3_UPLOAD_FAILED' | 'PRESIGNED_URL_FAILED' | 'CONFIRM_DB_FAILED',
-    causeError?: unknown,
+      message: string,
+      code: 'VIDEO_TOO_LARGE' | 'S3_UPLOAD_FAILED' | 'PRESIGNED_URL_FAILED' | 'CONFIRM_DB_FAILED',
+      causeError?: unknown,
   ) {
     super(message);
     this.name = 'CloudMediaUploadError';
@@ -103,20 +103,20 @@ const MAX_RETRY_ATTEMPTS = 3;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const buildIdempotencyKey = (prefix: string) =>
-  `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
 export const isRemoteHttpUrl = (uri?: string | null): boolean =>
-  Boolean(uri && (uri.startsWith('http://') || uri.startsWith('https://')));
+    Boolean(uri && (uri.startsWith('http://') || uri.startsWith('https://')));
 
 export const isLocalOrBase64Uri = (uri?: string | null): boolean =>
-  Boolean(
-    uri &&
-      (uri.startsWith('data:') ||
-        uri.startsWith('file://') ||
-        uri.startsWith('blob:') ||
-        uri.startsWith('content://') ||
-        uri.startsWith('ph://')),
-  );
+    Boolean(
+        uri &&
+        (uri.startsWith('data:') ||
+            uri.startsWith('file://') ||
+            uri.startsWith('blob:') ||
+            uri.startsWith('content://') ||
+            uri.startsWith('ph://')),
+    );
 
 /**
  * Thông báo lỗi rõ ràng cho người dùng khi upload ảnh đại diện / hình nền thất bại
@@ -124,7 +124,7 @@ export const isLocalOrBase64Uri = (uri?: string | null): boolean =>
  */
 export const notifyMediaUploadFailure = (contextLabel: string, error: unknown) => {
   const detail =
-    error instanceof Error ? error.message : 'Kết nối mạng không ổn định, vui lòng thử lại.';
+      error instanceof Error ? error.message : 'Kết nối mạng không ổn định, vui lòng thử lại.';
   console.error(`[CloudMediaService] Lỗi khi tải ${contextLabel}:`, error);
 
   if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.alert === 'function') {
@@ -138,79 +138,79 @@ export const notifyMediaUploadFailure = (contextLabel: string, error: unknown) =
  * Web: Resize và nén ảnh (đặc biệt khi nhận chuỗi Base64 hoặc blob) bằng <canvas>
  */
 const resizeImageOnWeb = (
-  uri: string,
-  maxWidth: number,
-  quality: number,
+    uri: string,
+    maxWidth: number,
+    quality: number,
 ): Promise<string> =>
-  new Promise((resolve) => {
-    if (typeof document === 'undefined') {
-      resolve(uri);
-      return;
-    }
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      try {
-        const srcW = img.naturalWidth || img.width || maxWidth;
-        const srcH = img.naturalHeight || img.height || maxWidth;
-        const scale = Math.min(1, maxWidth / Math.max(srcW, srcH));
-        const targetW = Math.max(1, Math.round(srcW * scale));
-        const targetH = Math.max(1, Math.round(srcH * scale));
-
-        const canvas = document.createElement('canvas');
-        canvas.width = targetW;
-        canvas.height = targetH;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(uri);
-          return;
-        }
-        ctx.drawImage(img, 0, 0, targetW, targetH);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      } catch {
+    new Promise((resolve) => {
+      if (typeof document === 'undefined') {
         resolve(uri);
+        return;
       }
-    };
-    img.onerror = () => resolve(uri);
-    img.src = uri;
-  });
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const srcW = img.naturalWidth || img.width || maxWidth;
+          const srcH = img.naturalHeight || img.height || maxWidth;
+          const scale = Math.min(1, maxWidth / Math.max(srcW, srcH));
+          const targetW = Math.max(1, Math.round(srcW * scale));
+          const targetH = Math.max(1, Math.round(srcH * scale));
+
+          const canvas = document.createElement('canvas');
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(uri);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } catch {
+          resolve(uri);
+        }
+      };
+      img.onerror = () => resolve(uri);
+      img.src = uri;
+    });
 
 /**
  * Web: đọc duration và chụp khung hình đầu của video bằng <video> + <canvas>
  */
 const getWebVideoMeta = (
-  uri: string,
+    uri: string,
 ): Promise<{ durationSec: number; thumbnailUri: string | null }> =>
-  new Promise((resolve) => {
-    const video = document.createElement('video');
-    video.preload = 'metadata';
-    video.muted = true;
-    video.playsInline = true;
-    video.src = uri;
+    new Promise((resolve) => {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+      video.src = uri;
 
-    let durationSec = 0;
-    const fail = () => resolve({ durationSec, thumbnailUri: null });
+      let durationSec = 0;
+      const fail = () => resolve({ durationSec, thumbnailUri: null });
 
-    video.onloadedmetadata = () => {
-      durationSec = Math.round(video.duration) || 0;
-      video.currentTime = Math.min(2, (video.duration || 1) / 2);
-    };
-    video.onseeked = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        const srcW = video.videoWidth || 640;
-        const srcH = video.videoHeight || 360;
-        const scale = Math.min(1, 640 / srcW);
-        canvas.width = Math.round(srcW * scale);
-        canvas.height = Math.round(srcH * scale);
-        canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
-        resolve({ durationSec, thumbnailUri: canvas.toDataURL('image/jpeg', 0.7) });
-      } catch {
-        fail();
-      }
-    };
-    video.onerror = fail;
-  });
+      video.onloadedmetadata = () => {
+        durationSec = Math.round(video.duration) || 0;
+        video.currentTime = Math.min(2, (video.duration || 1) / 2);
+      };
+      video.onseeked = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const srcW = video.videoWidth || 640;
+          const srcH = video.videoHeight || 360;
+          const scale = Math.min(1, 640 / srcW);
+          canvas.width = Math.round(srcW * scale);
+          canvas.height = Math.round(srcH * scale);
+          canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
+          resolve({ durationSec, thumbnailUri: canvas.toDataURL('image/jpeg', 0.7) });
+        } catch {
+          fail();
+        }
+      };
+      video.onerror = fail;
+    });
 
 const readPendingQueue = async (): Promise<PendingMediaQueueItem[]> => {
   try {
@@ -257,8 +257,8 @@ export const uploadAvatarToCloud = async (localUri: string): Promise<string> => 
  * - Có thể truyền purpose = 'AVATAR' hoặc 'HERO_WALLPAPER'.
  */
 export const uploadHeroWallpaperToCloud = async (
-  localUri: string,
-  purpose: 'AVATAR' | 'HERO_WALLPAPER' = 'HERO_WALLPAPER',
+    localUri: string,
+    purpose: 'AVATAR' | 'HERO_WALLPAPER' = 'HERO_WALLPAPER',
 ): Promise<string> => {
   if (isRemoteHttpUrl(localUri)) {
     return localUri;
@@ -285,8 +285,8 @@ export const uploadHeroWallpaperToCloud = async (
  *    tránh gửi profile cache cũ không có `updatedAt` khiến Backend gán `updatedAt = now` và ghi đè đối phương.
  */
 const sanitizeProfilesForCloudSync = async (
-  profiles?: Record<string, ProfileSyncPayload>,
-  options?: { strictUploadError?: boolean },
+    profiles?: Record<string, ProfileSyncPayload>,
+    options?: { strictUploadError?: boolean },
 ): Promise<Record<string, ProfileSyncPayload> | undefined> => {
   if (!profiles || typeof profiles !== 'object') return undefined;
 
@@ -331,15 +331,15 @@ const sanitizeProfilesForCloudSync = async (
  *   hàm sẽ lọc bỏ những profile không có `updatedAt` khỏi `membersById` để Backend không tự gán `updatedAt = now`.
  */
 export const pushSharedRoomSettingsToCloud = async (
-  coupleId: string,
-  settings: {
-    heroWallpaperUri?: string | null;
-    profiles?: Record<string, ProfileSyncPayload>;
-    anniversaryDate?: string | null;
-    momoFund?: any;
-    themePreset?: string;
-  },
-  options?: { notifyOnError?: boolean },
+    coupleId: string,
+    settings: {
+      heroWallpaperUri?: string | null;
+      profiles?: Record<string, ProfileSyncPayload>;
+      anniversaryDate?: string | null;
+      momoFund?: any;
+      themePreset?: string;
+    },
+    options?: { notifyOnError?: boolean },
 ): Promise<boolean> => {
   if (!coupleId) return false;
 
@@ -403,11 +403,11 @@ export const pushSharedRoomSettingsToCloud = async (
 };
 
 export const enqueuePendingMediaUpload = async (
-  input: UploadMediaInput,
+    input: UploadMediaInput,
 ): Promise<PendingMediaQueueItem> => {
   const queue = await readPendingQueue();
   const idempotencyKey =
-    input.idempotencyKey || buildIdempotencyKey(input.category.toLowerCase());
+      input.idempotencyKey || buildIdempotencyKey(input.category.toLowerCase());
 
   const existing = queue.find((item) => item.idempotencyKey === idempotencyKey);
   if (existing) return existing;
@@ -425,22 +425,22 @@ export const enqueuePendingMediaUpload = async (
 };
 
 export const uploadMediaToCloudAndSaveDb = async (
-  input: UploadMediaInput,
+    input: UploadMediaInput,
 ): Promise<CloudMediaRecord> => {
   let uploadUri = input.localUri;
   let thumbnailUrl: string | undefined = undefined;
   let durationSec = input.durationSec;
 
   const isAvatar =
-    input.purpose === 'AVATAR' || input.caption === 'Avatar';
+      input.purpose === 'AVATAR' || input.caption === 'Avatar';
   const isHeroWallpaper =
-    input.purpose === 'HERO_WALLPAPER' || input.caption === 'Hero Wallpaper';
+      input.purpose === 'HERO_WALLPAPER' || input.caption === 'Hero Wallpaper';
   const isThumbnail =
-    input.purpose === 'THUMBNAIL' || input.caption === 'thumbnail';
+      input.purpose === 'THUMBNAIL' || input.caption === 'thumbnail';
 
   // Tự động bật skipDbRecord cho Avatar, Hero Wallpaper và Thumbnail video để không làm rác Album
   const shouldSkipDbRecord =
-    input.skipDbRecord ?? (isAvatar || isHeroWallpaper || isThumbnail);
+      input.skipDbRecord ?? (isAvatar || isHeroWallpaper || isThumbnail);
 
   // 0. Native: chuỗi Base64 (data:image/...) được ghi ra file tạm TRƯỚC khi qua bước ImageManipulator,
   //    nhờ đó cả ảnh Base64 lẫn file:// đều được resize và nén đồng nhất.
@@ -467,16 +467,16 @@ export const uploadMediaToCloudAndSaveDb = async (
       const blob = await res.blob();
       if (blob.size > MAX_VIDEO_SIZE_BYTES) {
         throw new CloudMediaUploadError(
-          'VIDEO_TOO_LARGE: Video vượt quá giới hạn 200MB. Vui lòng chọn video ngắn hoặc nhẹ hơn.',
-          'VIDEO_TOO_LARGE',
+            'VIDEO_TOO_LARGE: Video vượt quá giới hạn 200MB. Vui lòng chọn video ngắn hoặc nhẹ hơn.',
+            'VIDEO_TOO_LARGE',
         );
       }
     } else {
       const fileInfo = await FileSystem.getInfoAsync(uploadUri);
       if (fileInfo.exists && typeof fileInfo.size === 'number' && fileInfo.size > MAX_VIDEO_SIZE_BYTES) {
         throw new CloudMediaUploadError(
-          'VIDEO_TOO_LARGE: Video vượt quá giới hạn 200MB. Vui lòng chọn video ngắn hoặc nhẹ hơn.',
-          'VIDEO_TOO_LARGE',
+            'VIDEO_TOO_LARGE: Video vượt quá giới hạn 200MB. Vui lòng chọn video ngắn hoặc nhẹ hơn.',
+            'VIDEO_TOO_LARGE',
         );
       }
     }
@@ -490,9 +490,9 @@ export const uploadMediaToCloudAndSaveDb = async (
         if (!durationSec) durationSec = meta.durationSec;
       } else {
         const thumbTimeMs =
-          durationSec && durationSec > 0
-            ? Math.min(2000, Math.floor((durationSec * 1000) / 2))
-            : 2000;
+            durationSec && durationSec > 0
+                ? Math.min(2000, Math.floor((durationSec * 1000) / 2))
+                : 2000;
         const t = await VideoThumbnails.getThumbnailAsync(input.localUri, { time: thumbTimeMs });
         thumbLocalUri = t.uri;
       }
@@ -523,20 +523,20 @@ export const uploadMediaToCloudAndSaveDb = async (
     } else if (!uploadUri.startsWith('blob:') && !uploadUri.startsWith('data:')) {
       try {
         const actions: ImageManipulator.Action[] = isAvatar
-          ? [{ resize: { width: 512 } }]
-          : isHeroWallpaper
-            ? [{ resize: { width: 1440 } }]
-            : [];
+            ? [{ resize: { width: 512 } }]
+            : isHeroWallpaper
+                ? [{ resize: { width: 1440 } }]
+                : [];
 
         const compressRatio = isAvatar ? 0.8 : isHeroWallpaper ? 0.9 : 0.85;
 
         const manipResult = await ImageManipulator.manipulateAsync(
-          uploadUri,
-          actions,
-          {
-            compress: compressRatio,
-            format: ImageManipulator.SaveFormat.JPEG,
-          },
+            uploadUri,
+            actions,
+            {
+              compress: compressRatio,
+              format: ImageManipulator.SaveFormat.JPEG,
+            },
         );
         uploadUri = manipResult.uri;
       } catch (e) {
@@ -549,10 +549,10 @@ export const uploadMediaToCloudAndSaveDb = async (
   const ext = isVideo ? 'mp4' : 'jpg';
   const contentType = isVideo ? 'video/mp4' : 'image/jpeg';
   const prefix = isAvatar
-    ? 'avatar'
-    : isHeroWallpaper
-      ? 'wallpaper'
-      : input.category.toLowerCase();
+      ? 'avatar'
+      : isHeroWallpaper
+          ? 'wallpaper'
+          : input.category.toLowerCase();
   const idempotencyKey = input.idempotencyKey || buildIdempotencyKey(prefix);
   const filename = `${prefix}_${Date.now()}.${ext}`;
 
@@ -584,27 +584,27 @@ export const uploadMediaToCloudAndSaveDb = async (
         });
         if (!putRes.ok) {
           throw new CloudMediaUploadError(
-            `S3/R2 trả về mã lỗi HTTP ${putRes.status} khi tải tệp lên.`,
-            'S3_UPLOAD_FAILED',
+              `S3/R2 trả về mã lỗi HTTP ${putRes.status} khi tải tệp lên.`,
+              'S3_UPLOAD_FAILED',
           );
         }
       } else {
         const uploadRes = await FileSystem.uploadAsync(
-          presigned.uploadUrl,
-          uploadUri,
-          {
-            httpMethod: 'PUT',
-            uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-            headers: {
-              'Content-Type': contentType,
+            presigned.uploadUrl,
+            uploadUri,
+            {
+              httpMethod: 'PUT',
+              uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+              headers: {
+                'Content-Type': contentType,
+              },
             },
-          },
         );
 
         if (uploadRes.status < 200 || uploadRes.status >= 300) {
           throw new CloudMediaUploadError(
-            `S3/R2 trả về mã lỗi HTTP ${uploadRes.status} khi tải tệp lên.`,
-            'S3_UPLOAD_FAILED',
+              `S3/R2 trả về mã lỗi HTTP ${uploadRes.status} khi tải tệp lên.`,
+              'S3_UPLOAD_FAILED',
           );
         }
       }
@@ -632,18 +632,18 @@ export const uploadMediaToCloudAndSaveDb = async (
 
       // Bước 3: Lưu remoteUrl và metadata vào PostgreSQL (chỉ dành cho ảnh/video Album, Locket, Time Capsule thật)
       const { data: savedRecord } = await api.post<CloudMediaRecord>(
-        '/api/v1/media/confirm',
-        {
-          category: input.category,
-          mediaType: input.mediaType,
-          fileKey: presigned.fileKey,
-          remoteUrl: finalRemoteUrl,
-          thumbnailUrl,
-          caption: input.caption || undefined,
-          stamp: input.stamp || undefined,
-          durationSec,
-          idempotencyKey,
-        },
+          '/api/v1/media/confirm',
+          {
+            category: input.category,
+            mediaType: input.mediaType,
+            fileKey: presigned.fileKey,
+            remoteUrl: finalRemoteUrl,
+            thumbnailUrl,
+            caption: input.caption || undefined,
+            stamp: input.stamp || undefined,
+            durationSec,
+            idempotencyKey,
+          },
       );
 
       return savedRecord;
@@ -656,7 +656,7 @@ export const uploadMediaToCloudAndSaveDb = async (
   }
 
   const isTooLargeError =
-    lastError instanceof Error && lastError.message.includes('VIDEO_TOO_LARGE');
+      lastError instanceof Error && lastError.message.includes('VIDEO_TOO_LARGE');
 
   if (!input.skipOfflineQueue && !isTooLargeError) {
     try {
@@ -711,7 +711,7 @@ export const fetchCloudWorkspaceMedia = async (limit = 150) => {
 
 export const deleteCloudMediaById = async (mediaId: string) => {
   const { data } = await api.delete<{ deleted: boolean; id: string }>(
-    `/api/v1/media/${mediaId}`,
+      `/api/v1/media/${mediaId}`,
   );
   return data;
 };
@@ -720,43 +720,60 @@ export const deleteCloudMediaById = async (mediaId: string) => {
 // ĐỒNG BỘ TOÀN BỘ DỮ LIỆU PHÒNG CẶP ĐÔI (EVENTS, GOALS, MOMO, QA, SETTINGS)
 // ============================================================================
 
+// Ghi lại lý do đồng bộ phòng thất bại để nhìn thấy trong Console (F12 trên web, Metro trên điện thoại)
+const logRoomSyncError = (step: string, error: any) => {
+  const status = error?.response?.status;
+  const serverMessage = error?.response?.data?.message;
+  const detail = status
+      ? `HTTP ${status}${serverMessage ? ` - ${JSON.stringify(serverMessage)}` : ''}`
+      : error?.message || 'Không có phản hồi (mạng hoặc CORS)';
+  console.warn(`[room-sync] ${step} thất bại: ${detail}`);
+};
+
 export const fetchFullCoupleRoomFromCloud = async (
-  coupleId: string,
+    coupleId: string,
 ): Promise<CoupleRoomCloudSnapshot | null> => {
   if (!coupleId) return null;
 
   try {
     const { data } = await api.get<CoupleRoomCloudSnapshot>(
-      '/api/v1/couples/workspace-sync',
-      { params: { coupleId } },
+        '/api/v1/couples/workspace-sync',
+        { params: { coupleId } },
     );
     if (data && typeof data === 'object') {
+      console.log(
+          `[room-sync] GET ok: ${Array.isArray(data.events) ? data.events.length : '?'} events, ${
+              Array.isArray(data.goals) ? data.goals.length : '?'
+          } goals`,
+      );
       return data;
     }
-  } catch {
+    console.warn('[room-sync] GET trả về dữ liệu rỗng hoặc sai dạng:', data);
+  } catch (getError) {
+    logRoomSyncError('GET workspace-sync', getError);
     try {
       const [milestonesRes, goalsRes, qaRes] = await Promise.allSettled([
         api.get<ImportantEvent[]>('/api/v1/milestones'),
         api.get<CoupleGoalItem[]>('/api/v1/couples/goals'),
         api.get<{ dailyQA?: DailyQAItem; qaHistory?: DailyQAItem[] }>(
-          '/api/v1/daily-answers/history',
+            '/api/v1/daily-answers/history',
         ),
       ]);
 
       const events =
-        milestonesRes.status === 'fulfilled' && Array.isArray(milestonesRes.value.data)
-          ? milestonesRes.value.data
-          : [];
+          milestonesRes.status === 'fulfilled' && Array.isArray(milestonesRes.value.data)
+              ? milestonesRes.value.data
+              : [];
       const goals =
-        goalsRes.status === 'fulfilled' && Array.isArray(goalsRes.value.data)
-          ? goalsRes.value.data
-          : [];
+          goalsRes.status === 'fulfilled' && Array.isArray(goalsRes.value.data)
+              ? goalsRes.value.data
+              : [];
       const dailyQA =
-        qaRes.status === 'fulfilled' ? qaRes.value.data?.dailyQA || null : null;
+          qaRes.status === 'fulfilled' ? qaRes.value.data?.dailyQA || null : null;
       const qaHistory =
-        qaRes.status === 'fulfilled' && Array.isArray(qaRes.value.data?.qaHistory)
-          ? qaRes.value.data.qaHistory
-          : [];
+          qaRes.status === 'fulfilled' && Array.isArray(qaRes.value.data?.qaHistory)
+              ? qaRes.value.data.qaHistory
+              : [];
 
       if (events.length > 0 || goals.length > 0 || dailyQA || qaHistory.length > 0) {
         return {
@@ -780,7 +797,7 @@ export const fetchFullCoupleRoomFromCloud = async (
  * Đảm bảo lọc bỏ mọi chuỗi Base64 trong `sharedSettings` trước khi PUT hoặc lưu vào AsyncStorage.
  */
 export const pushCoupleRoomSnapshotToCloud = async (
-  snapshot: Partial<CoupleRoomCloudSnapshot> & { coupleId: string },
+    snapshot: Partial<CoupleRoomCloudSnapshot> & { coupleId: string },
 ): Promise<boolean> => {
   if (!snapshot.coupleId) return false;
 
@@ -813,20 +830,21 @@ export const pushCoupleRoomSnapshotToCloud = async (
     });
     await storage.removeItem(`${PENDING_WORKSPACE_SNAPSHOT_KEY}_${snapshot.coupleId}`);
     return true;
-  } catch {
+  } catch (putError) {
+    logRoomSyncError('PUT workspace-sync', putError);
     await storage.setItem(
-      `${PENDING_WORKSPACE_SNAPSHOT_KEY}_${snapshot.coupleId}`,
-      JSON.stringify({
-        ...sanitizedSnapshot,
-        updatedAt: new Date().toISOString(),
-      }),
+        `${PENDING_WORKSPACE_SNAPSHOT_KEY}_${snapshot.coupleId}`,
+        JSON.stringify({
+          ...sanitizedSnapshot,
+          updatedAt: new Date().toISOString(),
+        }),
     );
     return false;
   }
 };
 
 export const flushPendingRoomSnapshot = async (
-  coupleId?: string | null,
+    coupleId?: string | null,
 ): Promise<boolean> => {
   if (!coupleId) return false;
   try {
@@ -838,7 +856,8 @@ export const flushPendingRoomSnapshot = async (
     await api.put('/api/v1/couples/workspace-sync', pendingSnapshot);
     await storage.removeItem(key);
     return true;
-  } catch {
+  } catch (flushError) {
+    logRoomSyncError('PUT workspace-sync (hàng đợi chờ)', flushError);
     return false;
   }
 };

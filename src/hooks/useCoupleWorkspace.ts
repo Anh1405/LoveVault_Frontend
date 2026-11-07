@@ -1756,89 +1756,111 @@ export function useCoupleWorkspace() {
     };
   }, [workspaceKeys, tombsKey, coupleId, normalizeAiBody, pullAndMergeCloudWorkspace]);
 
+  // Lịch sinh nhật tự động: tạo từ hồ sơ, cập nhật khi đổi ngày sinh hoặc tên,
+  // không tạo lại nếu người dùng đã xóa (trừ khi chính ngày sinh đó bị đổi).
+  // Bản tự tạo mang updatedAt thấp nhất (SEED) để không bao giờ đè lên dữ liệu của máy khác
+  // hay làm sống lại một mục đã bị xóa ở nơi khác.
+  const lastBirthRef = useRef<Record<string, string | null>>({});
+
   useEffect(() => {
     if (!isLoaded) return;
+
+    const SEED_UPDATED_AT = '1970-01-01T00:00:01.000Z';
+    const myId = `auto_bday_${currentUserId}`;
+    const partnerKey = partnerProfile.userId || `partner_of_${currentUserId}`;
+    const partnerId = `auto_bday_${partnerKey}`;
+
+    // Phát hiện đổi ngày sinh nằm ngoài updater để không bị chạy hai lần trong StrictMode
+    const birthChanged: Record<string, boolean> = {};
+    const birthPairs: Array<[string, string | null]> = [
+      [myId, myProfile.birthDate || null],
+      [partnerId, partnerProfile.birthDate || null],
+    ];
+    for (const [id, birth] of birthPairs) {
+      const before = lastBirthRef.current[id];
+      birthChanged[id] = Boolean(before) && before !== birth;
+      lastBirthRef.current[id] = birth;
+    }
 
     setEvents((prev) => {
       let changed = false;
       const nextList = [...prev];
+      const seedIds = new Set<string>();
 
-      const myBdayEventId = `auto_bday_${currentUserId}`;
-      if (myProfile.birthDate) {
-        const idx = nextList.findIndex((e) => e.id === myBdayEventId);
-        if (idx === -1 && !tombsRef.current.events[myBdayEventId]) {
+      const ensureBirthday = (cfg: {
+        id: string;
+        ownerUserId: string;
+        nickname: string;
+        birthDate: string | null | undefined;
+        notifyDaysBefore: number;
+        notifyAtTime: string;
+        aiTone: ImportantEvent['aiTone'];
+      }) => {
+        if (!cfg.birthDate) return;
+        const title = `Sinh nhật của ${cfg.nickname}`;
+        const idx = nextList.findIndex((e) => e.id === cfg.id);
+
+        if (idx === -1) {
+          const deletedByUser = Boolean(tombsRef.current.events[cfg.id]);
+          if (deletedByUser && !birthChanged[cfg.id]) return;
           changed = true;
+          if (!deletedByUser) seedIds.add(cfg.id);
           nextList.push({
-            id: myBdayEventId,
-            ownerUserId: currentUserId,
-            title: `Sinh nhật của ${myProfile.nickname}`,
-            eventDate: myProfile.birthDate,
+            id: cfg.id,
+            ownerUserId: cfg.ownerUserId,
+            title,
+            eventDate: cfg.birthDate,
             category: 'BIRTHDAY',
-            notifyDaysBefore: 1,
-            notifyAtTime: '08:00',
-            customMessage: `Đang cập nhật lời nhắc cho sinh nhật ${myProfile.nickname}...`,
-            aiTone: 'FUNNY',
+            notifyDaysBefore: cfg.notifyDaysBefore,
+            notifyAtTime: cfg.notifyAtTime,
+            customMessage: `Đang cập nhật lời nhắc cho sinh nhật ${cfg.nickname}...`,
+            aiTone: cfg.aiTone,
             autoDailyAi: true,
             lastAiGeneratedDate: '',
             isAutoBirthday: true,
             syncStatus: 'SYNCED',
           });
-        } else if (
-            nextList[idx].eventDate !== myProfile.birthDate ||
-            nextList[idx].title !== `Sinh nhật của ${myProfile.nickname}`
-        ) {
+          return;
+        }
+
+        if (nextList[idx].eventDate !== cfg.birthDate || nextList[idx].title !== title) {
           changed = true;
           nextList[idx] = {
             ...nextList[idx],
-            title: `Sinh nhật của ${myProfile.nickname}`,
-            eventDate: myProfile.birthDate,
+            title,
+            eventDate: cfg.birthDate,
             lastAiGeneratedDate: '',
           };
         }
-      }
+      };
 
-      const partnerKey = partnerProfile.userId || `partner_of_${currentUserId}`;
-      const partnerBdayEventId = `auto_bday_${partnerKey}`;
-      if (partnerProfile.birthDate) {
-        const idx = nextList.findIndex((e) => e.id === partnerBdayEventId);
-        if (idx === -1 && !tombsRef.current.events[partnerBdayEventId]) {
-          changed = true;
-          nextList.push({
-            id: partnerBdayEventId,
-            ownerUserId: partnerKey,
-            title: `Sinh nhật của ${partnerProfile.nickname}`,
-            eventDate: partnerProfile.birthDate,
-            category: 'BIRTHDAY',
-            notifyDaysBefore: 3,
-            notifyAtTime: '08:30',
-            customMessage: `Đang cập nhật lời nhắc cho sinh nhật ${partnerProfile.nickname}...`,
-            aiTone: 'GIFT_HINT',
-            autoDailyAi: true,
-            lastAiGeneratedDate: '',
-            isAutoBirthday: true,
-            syncStatus: 'SYNCED',
-          });
-        } else if (
-            nextList[idx].eventDate !== partnerProfile.birthDate ||
-            nextList[idx].title !== `Sinh nhật của ${partnerProfile.nickname}`
-        ) {
-          changed = true;
-          nextList[idx] = {
-            ...nextList[idx],
-            title: `Sinh nhật của ${partnerProfile.nickname}`,
-            eventDate: partnerProfile.birthDate,
-            lastAiGeneratedDate: '',
-          };
-        }
-      }
+      ensureBirthday({
+        id: myId,
+        ownerUserId: currentUserId,
+        nickname: myProfile.nickname,
+        birthDate: myProfile.birthDate,
+        notifyDaysBefore: 1,
+        notifyAtTime: '08:00',
+        aiTone: 'FUNNY',
+      });
+      ensureBirthday({
+        id: partnerId,
+        ownerUserId: partnerKey,
+        nickname: partnerProfile.nickname,
+        birthDate: partnerProfile.birthDate,
+        notifyDaysBefore: 3,
+        notifyAtTime: '08:30',
+        aiTone: 'GIFT_HINT',
+      });
 
-      if (changed) {
-        const stamped = finalizeList('events', prev, nextList);
-        storage.setItem(workspaceKeys.EVENTS, JSON.stringify(stamped)).catch(() => null);
-        void syncRoomSnapshotToCloud({ events: stamped });
-        return stamped;
-      }
-      return prev;
+      if (!changed) return prev;
+
+      const stamped = finalizeList('events', prev, nextList).map((e) =>
+          seedIds.has(e.id) ? { ...e, updatedAt: SEED_UPDATED_AT } : e,
+      );
+      storage.setItem(workspaceKeys.EVENTS, JSON.stringify(stamped)).catch(() => null);
+      void syncRoomSnapshotToCloud({ events: stamped });
+      return stamped;
     });
   }, [
     isLoaded,
@@ -1849,7 +1871,6 @@ export function useCoupleWorkspace() {
     partnerProfile.birthDate,
     partnerProfile.nickname,
     workspaceKeys.EVENTS,
-    events.length,
     finalizeList,
     syncRoomSnapshotToCloud,
   ]);
