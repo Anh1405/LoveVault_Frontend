@@ -23,8 +23,8 @@ export interface LocketSnapView {
  * Chuẩn hóa chuỗi (String + trim) để tránh lỗi lệch kiểu dữ liệu hoặc dư khoảng trắng.
  */
 export function canDeleteSnap(
-  snap: Pick<LocketSnapView, 'ownerId'> | null | undefined,
-  viewerId: string | null | undefined,
+    snap: Pick<LocketSnapView, 'ownerId'> | null | undefined,
+    viewerId: string | null | undefined,
 ): boolean {
   const owner = snap?.ownerId ? String(snap.ownerId).trim() : '';
   const viewer = viewerId ? String(viewerId).trim() : '';
@@ -33,7 +33,20 @@ export function canDeleteSnap(
 }
 
 /** Bỏ ký tự chọn biến thể emoji (U+FE0F) để "❤" và "❤️" được tính là một. */
-export const normalizeEmoji = (emoji: string): string => emoji.replace(/\uFE0F/g, '');
+export const normalizeEmoji = (emoji: unknown): string => toEmojiString(emoji).replace(/\uFE0F/g, '');
+
+/**
+ * \u00C9p m\u1ED9t ph\u1EA7n t\u1EED reaction b\u1EA5t k\u1EF3 v\u1EC1 chu\u1ED7i emoji.
+ * Ch\u1EA5p nh\u1EADn chu\u1ED7i, ho\u1EB7c object d\u1EA1ng { emoji } t\u1EEB server / cache c\u0169; m\u1ECDi th\u1EE9 kh\u00E1c th\u00E0nh ''.
+ */
+export function toEmojiString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const candidate = (value as { emoji?: unknown }).emoji;
+    if (typeof candidate === 'string') return candidate;
+  }
+  return '';
+}
 
 const REACTION_LABELS: Record<string, string> = {
   '❤': 'Yêu thích',
@@ -44,8 +57,8 @@ const REACTION_LABELS: Record<string, string> = {
   '😡': 'Tức giận',
 };
 
-export const getReactionLabel = (emoji: string): string =>
-  REACTION_LABELS[normalizeEmoji(emoji)] ?? 'Cảm xúc khác';
+export const getReactionLabel = (emoji: unknown): string =>
+    REACTION_LABELS[normalizeEmoji(emoji)] ?? 'Cảm xúc khác';
 
 export const formatReactionCount = (count: number): string => (count > 99 ? '99+' : String(count));
 
@@ -60,9 +73,11 @@ export interface ReactionSummaryItem {
  * Gom theo loại cảm xúc, loại nào vừa được thả gần đây nhất đứng đầu.
  * Tối đa 6 loại nên thanh tóm tắt không bao giờ tràn, dù có hàng trăm lượt thả.
  */
-export function summarizeReactions(reactions: readonly string[]): ReactionSummaryItem[] {
+export function summarizeReactions(reactions: readonly unknown[]): ReactionSummaryItem[] {
   const byKey = new Map<string, ReactionSummaryItem>();
-  reactions.forEach((emoji, index) => {
+  (Array.isArray(reactions) ? reactions : []).forEach((raw, index) => {
+    const emoji = toEmojiString(raw);
+    if (!emoji) return;
     const key = normalizeEmoji(emoji);
     const prev = byKey.get(key);
     if (prev) {
@@ -84,10 +99,12 @@ export interface ReactionRun {
 }
 
 /** Lịch sử mới nhất trước, các lượt thả liên tiếp cùng loại gộp thành một dòng. */
-export function buildReactionRuns(reactions: readonly string[]): ReactionRun[] {
+export function buildReactionRuns(reactions: readonly unknown[]): ReactionRun[] {
   const runs: ReactionRun[] = [];
-  for (let i = reactions.length - 1; i >= 0; i -= 1) {
-    const emoji = reactions[i];
+  const list = Array.isArray(reactions) ? reactions : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const emoji = toEmojiString(list[i]);
+    if (!emoji) continue;
     const last = runs[runs.length - 1];
     if (last && normalizeEmoji(last.emoji) === normalizeEmoji(emoji)) {
       last.count += 1;

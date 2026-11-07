@@ -21,48 +21,23 @@ const RAW_BASE_URL =
     process.env.EXPO_PUBLIC_API_URL || 'https://lovevault-appmoblie.onrender.com';
 const SOCKET_BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
 
-// Chuẩn hóa mọi reaction (chuỗi cũ, object từ server, dữ liệu cache lỗi) về dạng object
-// với emoji / userId luôn là chuỗi. Tránh lỗi "n.replace is not a function" trong summarizeReactions.
-const sanitizeReactions = (raw: unknown): any[] => {
+// LocketSnapView.reactions là string[] (mỗi phần tử là một emoji).
+// Server / cache có thể trả object { emoji, userId, ... } hoặc dữ liệu hỏng,
+// nên chuẩn hóa mọi thứ về mảng chuỗi emoji để summarizeReactions không còn lỗi
+// "n.replace is not a function".
+const sanitizeReactions = (raw: unknown): string[] => {
     if (!Array.isArray(raw)) return [];
-    const result: any[] = [];
-    raw.forEach((r: any, idx: number) => {
-        if (r === null || r === undefined) return;
-
-        if (typeof r === 'string' || typeof r === 'number') {
-            const emoji = String(r).trim();
-            if (!emoji) return;
-            result.push({
-                id: `legacy_${idx}_${emoji}`,
-                userId: '',
-                emoji,
-                createdAt: new Date(0).toISOString(),
-            });
-            return;
+    const result: string[] = [];
+    raw.forEach((r: any) => {
+        let emoji = '';
+        if (typeof r === 'string') {
+            emoji = r;
+        } else if (r && typeof r === 'object') {
+            const candidate = r.emoji ?? r.reaction ?? r.type;
+            if (typeof candidate === 'string') emoji = candidate;
         }
-
-        if (typeof r === 'object') {
-            const rawEmoji = r.emoji ?? r.reaction ?? r.type ?? '';
-            const emoji = typeof rawEmoji === 'string' ? rawEmoji.trim() : '';
-            if (!emoji) return;
-            const rawUserId = r.userId ?? r.user_id ?? r.uploaderId ?? '';
-            const userId =
-                typeof rawUserId === 'string' || typeof rawUserId === 'number'
-                    ? String(rawUserId)
-                    : '';
-            result.push({
-                ...r,
-                id: String(r.id ?? `${userId}_${emoji}_${idx}`),
-                userId,
-                emoji,
-                createdAt:
-                    typeof r.createdAt === 'string'
-                        ? r.createdAt
-                        : r.createdAt
-                            ? new Date(r.createdAt).toISOString()
-                            : new Date(0).toISOString(),
-            });
-        }
+        emoji = emoji.trim();
+        if (emoji) result.push(emoji);
     });
     return result;
 };
@@ -308,20 +283,9 @@ export function useRealtimeLocket() {
                     setLocketSnaps((prev) => {
                         const next = prev.map((s) => {
                             if (s.id !== payload.snapId) return s;
-                            const currentReactions = Array.isArray(s.reactions) ? s.reactions : [];
-                            const updatedReactions = sanitizeReactions(
-                                Array.isArray(payload.reactions)
-                                    ? payload.reactions
-                                    : [
-                                        ...currentReactions,
-                                        {
-                                            id: `${payload.userId}_${Date.now()}`,
-                                            userId: payload.userId,
-                                            emoji: payload.emoji,
-                                            createdAt: new Date().toISOString(),
-                                        },
-                                    ],
-                            );
+                            const updatedReactions = Array.isArray(payload.reactions)
+                                ? sanitizeReactions(payload.reactions)
+                                : sanitizeReactions([...sanitizeReactions(s.reactions), payload.emoji]);
                             return { ...s, reactions: updatedReactions };
                         });
                         void storage.setItem(cacheKey, JSON.stringify(next));
@@ -494,28 +458,11 @@ export function useRealtimeLocket() {
         async (snapId: string, emoji: string) => {
             void Haptics.selectionAsync().catch(() => null);
 
-            const newReactionObj = {
-                id: `${currentUserId}_${Date.now()}`,
-                userId: currentUserId,
-                emoji,
-                createdAt: new Date().toISOString(),
-            };
-
             setLocketSnaps((prev) => {
                 const next = prev.map((s) => {
                     if (s.id !== snapId) return s;
-
-                    // 1. Đảm bảo s.reactions luôn là mảng hợp lệ
-                    const currentReactions = Array.isArray(s.reactions) ? s.reactions : [];
-
-                    // 2. Lọc an toàn chống null / undefined / sai kiểu dữ liệu
-                    const filtered = currentReactions.filter((r: any) => {
-                        if (!r) return false;
-                        if (typeof r === 'string') return true;
-                        return String(r.userId) !== String(currentUserId) || r.emoji !== emoji;
-                    });
-
-                    return { ...s, reactions: sanitizeReactions([...filtered, newReactionObj]) };
+                    // reactions luôn là mảng chuỗi emoji, phần tử cuối là lượt mới nhất
+                    return { ...s, reactions: sanitizeReactions([...sanitizeReactions(s.reactions), emoji]) };
                 });
                 void storage.setItem(cacheKey, JSON.stringify(next));
                 return next;
