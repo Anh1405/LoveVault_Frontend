@@ -1,6 +1,6 @@
 // src/components/home/LocketSnapCard.tsx
 import React, { memo, useMemo } from 'react';
-import { View, Text, Image, Pressable, StyleSheet } from 'react-native';
+import { View, Text, Image, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
 import { ThemeColors } from '../../constants/theme';
 import {
   LOCKET_REACTION_EMOJIS,
@@ -8,10 +8,9 @@ import {
   canDeleteSnap,
   formatReactionCount,
   getReactionLabel,
+  getResponsiveMaxVisibleChips,
   summarizeReactions,
 } from './locketReactions';
-
-const MAX_VISIBLE_CHIPS = 4;
 
 interface LocketSnapCardProps {
   snap: LocketSnapView;
@@ -31,11 +30,13 @@ const LocketSnapCardInner: React.FC<LocketSnapCardProps> = ({
   onReact,
   onOpenReactions,
 }) => {
+  const { width: screenWidth } = useWindowDimensions();
+  const maxVisibleChips = getResponsiveMaxVisibleChips(screenWidth);
+
   const total = snap.reactions.length;
   const canDelete = canDeleteSnap(snap, viewerId);
-  // total nằm trong deps để vẫn cập nhật nếu hook push thẳng vào mảng cũ
   const summary = useMemo(() => summarizeReactions(snap.reactions), [snap.reactions, total]);
-  const visibleChips = summary.slice(0, MAX_VISIBLE_CHIPS);
+  const visibleChips = summary.slice(0, maxVisibleChips);
   const hiddenKinds = summary.length - visibleChips.length;
 
   return (
@@ -56,7 +57,12 @@ const LocketSnapCardInner: React.FC<LocketSnapCardProps> = ({
           <View style={{ flex: 1 }}>
             <View style={styles.nameRow}>
               <Text
-                style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary, flexShrink: 1 }}
+                style={{
+                  fontSize: 14,
+                  fontWeight: '700',
+                  color: colors.textPrimary,
+                  flexShrink: 1,
+                }}
                 numberOfLines={1}
               >
                 {snap.senderName}
@@ -93,7 +99,7 @@ const LocketSnapCardInner: React.FC<LocketSnapCardProps> = ({
         ) : null}
       </View>
 
-      {/* ẢNH VUÔNG 1:1 */}
+      {/* ẢNH VUÔNG 1:1 (Tự động giới hạn maxWidth trên màn hình rộng để không bị quá khổ) */}
       <View style={styles.imageWrap}>
         <Image source={{ uri: snap.uri }} style={styles.image} />
 
@@ -126,7 +132,7 @@ const LocketSnapCardInner: React.FC<LocketSnapCardProps> = ({
         </Text>
       )}
 
-      {/* KHỐI CẢM XÚC: TÓM TẮT (MỚI NHẤT TRƯỚC) + HÀNG THẢ NHANH */}
+      {/* KHỐI CẢM XÚC */}
       <View style={[styles.reactionPanel, { backgroundColor: colors.surfaceVariant }]}>
         <Pressable
           accessibilityRole="button"
@@ -220,7 +226,7 @@ const styles = StyleSheet.create({
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
   deleteBtn: { minWidth: 44, minHeight: 44, justifyContent: 'center', alignItems: 'flex-end' },
-  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
   senderBadge: {
     width: 34,
     height: 34,
@@ -236,6 +242,8 @@ const styles = StyleSheet.create({
   },
   imageWrap: {
     width: '100%',
+    maxWidth: 520,
+    alignSelf: 'center',
     aspectRatio: 1,
     borderRadius: 14,
     overflow: 'hidden',

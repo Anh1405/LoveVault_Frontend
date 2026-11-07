@@ -1,20 +1,19 @@
 // src/components/home/RedesignedAlbumSection.tsx
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Pressable,
   ScrollView,
-  FlatList,
-  Dimensions,
+  LayoutChangeEvent,
+  useWindowDimensions,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
-import { ThemeColors } from '../../constants/theme';
+import { ThemeColors, METRICS } from '../../constants/theme';
 import { AlbumMediaWithCategory } from '../../screens/HomeScreen';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const GRID_ITEM_WIDTH = (SCREEN_WIDTH - 44) / 2;
+const GRID_GAP = 12;
 
 interface RedesignedAlbumSectionProps {
   colors: ThemeColors;
@@ -45,7 +44,27 @@ export const RedesignedAlbumSection: React.FC<RedesignedAlbumSectionProps> = ({
   onOpenMedia,
   onDeleteCategory,
 }) => {
+  const { width: windowWidth } = useWindowDimensions();
+  const [measuredWidth, setMeasuredWidth] = useState<number>(0);
   const [viewMode, setViewMode] = useState<'FOLDERS' | 'GRID'>('GRID');
+
+  const handleContainerLayout = useCallback((e: LayoutChangeEvent) => {
+    const w = Math.floor(e.nativeEvent.layout.width);
+    if (w > 0) {
+      setMeasuredWidth((prev) => (Math.abs(prev - w) <= 1 ? prev : w));
+    }
+  }, []);
+
+  // Tính toán chiều rộng thực tế của vùng chứa (hỗ trợ cả điện thoại nhỏ, xoay ngang và Tablet/Web)
+  const fallbackWidth = Math.min(680, windowWidth) - METRICS.paddingHorizontal * 2;
+  const effectiveWidth = measuredWidth > 0 ? measuredWidth : Math.max(260, fallbackWidth);
+
+  // Tự động chia 3 cột khi vùng hiển thị >= 520px (Tablet / Landscape / Web), 2 cột trên điện thoại
+  const numColumns = effectiveWidth >= 520 ? 3 : 2;
+  const gridItemWidth = Math.floor(
+    (effectiveWidth - GRID_GAP * (numColumns - 1)) / numColumns,
+  );
+  const folderCoverHeight = Math.max(96, Math.round(gridItemWidth * 0.68));
 
   const filteredMedia = useMemo(() => {
     return mediaList.filter((m) => {
@@ -61,10 +80,10 @@ export const RedesignedAlbumSection: React.FC<RedesignedAlbumSectionProps> = ({
   }, [mediaList, mediaFilter, selectedCategory]);
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} onLayout={handleContainerLayout}>
       {/* HEADER & CHUYỂN CHẾ ĐỘ XEM */}
       <View style={styles.headerRow}>
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, minWidth: 150 }}>
           <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
             Album kỷ niệm
           </Text>
@@ -112,9 +131,13 @@ export const RedesignedAlbumSection: React.FC<RedesignedAlbumSectionProps> = ({
         </View>
       </View>
 
-      {/* THANH THAO TÁC TẢI NHANH CHỈNH GỌN */}
+      {/* THANH THAO TÁC TẢI NHANH */}
       <View style={styles.actionToolBar}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ gap: 8 }}
+        >
           <Pressable
             style={[styles.quickAddPill, { backgroundColor: colors.primary }]}
             onPress={() => onPickMedia('IMAGE')}
@@ -152,17 +175,28 @@ export const RedesignedAlbumSection: React.FC<RedesignedAlbumSectionProps> = ({
           <Pressable
             style={[
               styles.folderCard,
-              { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
+              {
+                width: gridItemWidth,
+                backgroundColor: colors.surface,
+                borderColor: colors.borderSubtle,
+              },
             ]}
             onPress={() => {
               onSelectCategory('ALL');
               setViewMode('GRID');
             }}
           >
-            <View style={[styles.folderCoverStack, { backgroundColor: colors.surfaceVariant }]}>
+            <View
+              style={[
+                styles.folderCoverStack,
+                { height: folderCoverHeight, backgroundColor: colors.surfaceVariant },
+              ]}
+            >
               <Text style={{ fontSize: 28 }}>🗂️</Text>
             </View>
-            <Text style={[styles.folderTitle, { color: colors.textPrimary }]}>Tất cả ảnh & video</Text>
+            <Text style={[styles.folderTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+              Tất cả ảnh & video
+            </Text>
             <Text style={[styles.folderCount, { color: colors.textSecondary }]}>
               {mediaList.length} mục
             </Text>
@@ -177,7 +211,11 @@ export const RedesignedAlbumSection: React.FC<RedesignedAlbumSectionProps> = ({
                 key={cat}
                 style={[
                   styles.folderCard,
-                  { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
+                  {
+                    width: gridItemWidth,
+                    backgroundColor: colors.surface,
+                    borderColor: colors.borderSubtle,
+                  },
                 ]}
                 onPress={() => {
                   onSelectCategory(cat);
@@ -185,7 +223,12 @@ export const RedesignedAlbumSection: React.FC<RedesignedAlbumSectionProps> = ({
                 }}
                 onLongPress={() => onDeleteCategory(cat)}
               >
-                <View style={[styles.folderCoverStack, { backgroundColor: colors.surfaceVariant }]}>
+                <View
+                  style={[
+                    styles.folderCoverStack,
+                    { height: folderCoverHeight, backgroundColor: colors.surfaceVariant },
+                  ]}
+                >
                   {coverImage ? (
                     <ExpoImage
                       source={{ uri: coverImage }}
@@ -251,6 +294,7 @@ export const RedesignedAlbumSection: React.FC<RedesignedAlbumSectionProps> = ({
               >
                 <Text
                   style={{ fontSize: 11, fontWeight: '700', color: colors.onPrimaryContainer }}
+                  numberOfLines={1}
                 >
                   📁 {selectedCategory} ✕
                 </Text>
@@ -263,7 +307,14 @@ export const RedesignedAlbumSection: React.FC<RedesignedAlbumSectionProps> = ({
             {filteredMedia.map((item) => (
               <Pressable
                 key={item.id}
-                style={[styles.mediaCard, { backgroundColor: colors.surfaceVariant }]}
+                style={[
+                  styles.mediaCard,
+                  {
+                    width: gridItemWidth,
+                    height: Math.round(gridItemWidth * 1.15),
+                    backgroundColor: colors.surfaceVariant,
+                  },
+                ]}
                 onPress={() => onOpenMedia(item)}
               >
                 <ExpoImage
@@ -294,11 +345,13 @@ export const RedesignedAlbumSection: React.FC<RedesignedAlbumSectionProps> = ({
 };
 
 const styles = StyleSheet.create({
-  container: { marginBottom: 20 },
+  container: { marginBottom: 20, width: '100%' },
   headerRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 10,
     marginBottom: 12,
   },
   sectionTitle: { fontSize: 17, fontWeight: '800', letterSpacing: -0.3 },
@@ -332,17 +385,15 @@ const styles = StyleSheet.create({
   folderGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: GRID_GAP,
   },
   folderCard: {
-    width: GRID_ITEM_WIDTH,
     borderRadius: 16,
     padding: 10,
     borderWidth: 1,
   },
   folderCoverStack: {
     width: '100%',
-    height: 110,
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
@@ -354,6 +405,7 @@ const styles = StyleSheet.create({
   folderCount: { fontSize: 11, marginTop: 2 },
   filterChipRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8,
     marginBottom: 12,
@@ -368,16 +420,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 12,
-    marginLeft: 'auto',
+    maxWidth: '100%',
   },
   mediaGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: GRID_GAP,
   },
   mediaCard: {
-    width: GRID_ITEM_WIDTH,
-    height: GRID_ITEM_WIDTH * 1.15,
     borderRadius: 16,
     overflow: 'hidden',
     position: 'relative',

@@ -12,6 +12,8 @@ import {
   ToastAndroid,
   Platform,
   Share,
+  KeyboardAvoidingView,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
@@ -22,6 +24,9 @@ import { PALETTE, METRICS } from '../constants/theme';
 
 export const PairingScreen = () => {
   const insets = useSafeAreaInsets();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const isSmallDevice = screenWidth < 360 || screenHeight < 680;
+
   const [activeTab, setActiveTab] = useState<'SHARE' | 'ENTER'>('SHARE');
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<number>(0);
@@ -173,196 +178,246 @@ export const PairingScreen = () => {
   };
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+    <View
+      style={[
+        styles.screen,
+        {
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        },
+      ]}
+    >
       <StatusBar barStyle="dark-content" backgroundColor={PALETTE.background} />
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
+      <KeyboardAvoidingView
+        style={styles.flexOne}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {/* Header mang phong cách cảm xúc */}
-        <View style={styles.headerBlock}>
-          <Text style={styles.badgeLabel}>💖 KẾT NỐI LỨA ĐÔI</Text>
-          <Text style={styles.title}>Ghép đôi cùng người ấy</Text>
-          <Text style={styles.description}>
-            Chia sẻ mã cá nhân hoặc nhập mã từ đối phương để mở khóa không gian riêng tư dành cho hai bạn.
-          </Text>
-        </View>
+        <ScrollView
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingVertical: isSmallDevice ? 16 : 28 },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.responsiveContainer}>
+            {/* Header */}
+            <View style={styles.headerBlock}>
+              <Text style={styles.badgeLabel}>💖 KẾT NỐI LỨA ĐÔI</Text>
+              <Text style={[styles.title, isSmallDevice && { fontSize: 22 }]}>
+                Ghép đôi cùng người ấy
+              </Text>
+              <Text style={styles.description}>
+                Chia sẻ mã cá nhân hoặc nhập mã từ đối phương để mở khóa không gian riêng tư dành cho hai bạn.
+              </Text>
+            </View>
 
-        {statusMessage && (
-          <View
-            style={[
-              styles.messageBanner,
-              statusMessage.isError ? styles.errorBanner : styles.successBanner,
-            ]}
-          >
-            <Text
-              style={[
-                styles.messageText,
-                statusMessage.isError ? styles.errorText : styles.successText,
-              ]}
-            >
-              {statusMessage.text}
-            </Text>
-          </View>
-        )}
-
-        {/* Thanh chuyển đổi Tab hiện đại */}
-        <View style={styles.tabContainer}>
-          <Pressable
-            style={[styles.tabButton, activeTab === 'SHARE' && styles.activeTabButton]}
-            onPress={() => setActiveTab('SHARE')}
-          >
-            <Text style={[styles.tabText, activeTab === 'SHARE' && styles.activeTabText]}>
-              Mã của bạn
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.tabButton, activeTab === 'ENTER' && styles.activeTabButton]}
-            onPress={() => setActiveTab('ENTER')}
-          >
-            <Text style={[styles.tabText, activeTab === 'ENTER' && styles.activeTabText]}>
-              Nhập mã người ấy
-            </Text>
-          </Pressable>
-        </View>
-
-        {/* TAB 1: GỬI MÃ */}
-        {activeTab === 'SHARE' && (
-          <View style={styles.card}>
-            {generatedCode ? (
-              <View style={styles.codeContainer}>
-                <Text style={styles.cardSubTitle}>Mã kết nối của bạn</Text>
-                <View style={styles.codeBadge}>
-                  <Text style={styles.codeDisplay}>{generatedCode}</Text>
-                </View>
-                <Text style={styles.timerDisplay}>⏱ Hiệu lực còn lại: {formatTimer(timeLeft)}</Text>
-
-                <View style={styles.actionRow}>
-                  <Pressable
-                    accessibilityRole="button"
-                    style={[styles.actionBtn, styles.copyBtn]}
-                    android_ripple={{ color: PALETTE.rippleDark }}
-                    onPress={copyToClipboard}
-                  >
-                    <Text style={styles.copyBtnText}>📋 SAO CHÉP MÃ</Text>
-                  </Pressable>
-
-                  <Pressable
-                    accessibilityRole="button"
-                    style={[styles.actionBtn, styles.shareBtn]}
-                    android_ripple={{ color: PALETTE.rippleLight }}
-                    onPress={shareCode}
-                  >
-                    <Text style={styles.shareBtnText}>📲 CHIA SẺ NGAY</Text>
-                  </Pressable>
-                </View>
-              </View>
-            ) : (
-              <View style={styles.emptyCodeContainer}>
-                <Text style={styles.emptyCodeTitle}>Bạn chưa có mã ghép đôi nào</Text>
-                <Text style={styles.emptyCodeDesc}>
-                  Tạo mã 6 số ngẫu nhiên để gửi cho người ấy kết nối trong vòng 15 phút.
+            {statusMessage && (
+              <View
+                style={[
+                  styles.messageBanner,
+                  statusMessage.isError ? styles.errorBanner : styles.successBanner,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.messageText,
+                    statusMessage.isError ? styles.errorText : styles.successText,
+                  ]}
+                >
+                  {statusMessage.text}
                 </Text>
+              </View>
+            )}
+
+            {/* Thanh chuyển đổi Tab */}
+            <View style={styles.tabContainer}>
+              <Pressable
+                style={[styles.tabButton, activeTab === 'SHARE' && styles.activeTabButton]}
+                onPress={() => setActiveTab('SHARE')}
+              >
+                <Text
+                  style={[styles.tabText, activeTab === 'SHARE' && styles.activeTabText]}
+                  numberOfLines={1}
+                >
+                  Mã của bạn
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[styles.tabButton, activeTab === 'ENTER' && styles.activeTabButton]}
+                onPress={() => setActiveTab('ENTER')}
+              >
+                <Text
+                  style={[styles.tabText, activeTab === 'ENTER' && styles.activeTabText]}
+                  numberOfLines={1}
+                >
+                  Nhập mã người ấy
+                </Text>
+              </Pressable>
+            </View>
+
+            {/* TAB 1: GỬI MÃ */}
+            {activeTab === 'SHARE' && (
+              <View style={[styles.card, isSmallDevice && { padding: 16 }]}>
+                {generatedCode ? (
+                  <View style={styles.codeContainer}>
+                    <Text style={styles.cardSubTitle}>Mã kết nối của bạn</Text>
+                    <View style={[styles.codeBadge, isSmallDevice && { paddingHorizontal: 16 }]}>
+                      <Text
+                        style={[
+                          styles.codeDisplay,
+                          isSmallDevice && { fontSize: 28, letterSpacing: 5 },
+                        ]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                      >
+                        {generatedCode}
+                      </Text>
+                    </View>
+                    <Text style={styles.timerDisplay}>
+                      ⏱ Hiệu lực còn lại: {formatTimer(timeLeft)}
+                    </Text>
+
+                    <View style={[styles.actionRow, isSmallDevice && { flexDirection: 'column' }]}>
+                      <Pressable
+                        accessibilityRole="button"
+                        style={[styles.actionBtn, styles.copyBtn]}
+                        android_ripple={{ color: PALETTE.rippleDark }}
+                        onPress={copyToClipboard}
+                      >
+                        <Text style={styles.copyBtnText}>📋 SAO CHÉP MÃ</Text>
+                      </Pressable>
+
+                      <Pressable
+                        accessibilityRole="button"
+                        style={[styles.actionBtn, styles.shareBtn]}
+                        android_ripple={{ color: PALETTE.rippleLight }}
+                        onPress={shareCode}
+                      >
+                        <Text style={styles.shareBtnText}>📲 CHIA SẺ NGAY</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.emptyCodeContainer}>
+                    <Text style={styles.emptyCodeTitle}>Bạn chưa có mã ghép đôi nào</Text>
+                    <Text style={styles.emptyCodeDesc}>
+                      Tạo mã 6 số ngẫu nhiên để gửi cho người ấy kết nối trong vòng 15 phút.
+                    </Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      style={({ pressed }) => [
+                        styles.primaryButton,
+                        pressed && { backgroundColor: PALETTE.primaryPressed },
+                        actionLoading && styles.buttonDisabled,
+                      ]}
+                      android_ripple={{ color: PALETTE.rippleLight }}
+                      onPress={handleGenerateCode}
+                      disabled={actionLoading}
+                    >
+                      {actionLoading ? (
+                        <ActivityIndicator color={PALETTE.surface} size="small" />
+                      ) : (
+                        <Text style={styles.primaryButtonText}>Tạo mã mới ngay</Text>
+                      )}
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* TAB 2: NHẬP MÃ OTP 6 Ô LINH HOẠT */}
+            {activeTab === 'ENTER' && (
+              <View style={[styles.card, isSmallDevice && { padding: 16 }]}>
+                <Text style={styles.cardSubTitle}>Nhập 6 số từ ứng dụng đối phương</Text>
+
+                <TextInput
+                  ref={inputRef}
+                  style={styles.hiddenInput}
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  value={inputCode}
+                  onChangeText={(text) => {
+                    setInputCode(text.replace(/[^0-9]/g, ''));
+                    if (statusMessage) setStatusMessage(null);
+                  }}
+                  autoFocus={true}
+                />
+
+                <Pressable
+                  style={[styles.otpRow, { gap: isSmallDevice ? 6 : 10 }]}
+                  onPress={() => inputRef.current?.focus()}
+                >
+                  {Array.from({ length: 6 }).map((_, index) => {
+                    const digit = inputCode[index] || '';
+                    const isFocused = inputCode.length === index;
+                    return (
+                      <View
+                        key={index}
+                        style={[
+                          styles.otpBox,
+                          digit ? styles.otpBoxFilled : null,
+                          isFocused ? styles.otpBoxFocused : null,
+                        ]}
+                      >
+                        <Text style={[styles.otpDigit, isSmallDevice && { fontSize: 18 }]}>
+                          {digit}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </Pressable>
+
                 <Pressable
                   accessibilityRole="button"
                   style={({ pressed }) => [
                     styles.primaryButton,
                     pressed && { backgroundColor: PALETTE.primaryPressed },
-                    actionLoading && styles.buttonDisabled,
+                    (actionLoading || inputCode.length !== 6) && styles.buttonDisabled,
                   ]}
                   android_ripple={{ color: PALETTE.rippleLight }}
-                  onPress={handleGenerateCode}
-                  disabled={actionLoading}
+                  onPress={handleConnect}
+                  disabled={actionLoading || inputCode.length !== 6}
                 >
                   {actionLoading ? (
                     <ActivityIndicator color={PALETTE.surface} size="small" />
                   ) : (
-                    <Text style={styles.primaryButtonText}>Tạo mã mới ngay</Text>
+                    <Text style={styles.primaryButtonText}>Xác nhận kết nối</Text>
                   )}
                 </Pressable>
               </View>
             )}
-          </View>
-        )}
-
-        {/* TAB 2: NHẬP MÃ BẰNG GIAO DIỆN OTP 6 Ô HOÀN CHỈNH */}
-        {activeTab === 'ENTER' && (
-          <View style={styles.card}>
-            <Text style={styles.cardSubTitle}>Nhập 6 số từ ứng dụng đối phương</Text>
-
-            {/* Input ẩn nhận giá trị gõ bàn phím */}
-            <TextInput
-              ref={inputRef}
-              style={styles.hiddenInput}
-              keyboardType="number-pad"
-              maxLength={6}
-              value={inputCode}
-              onChangeText={(text) => {
-                setInputCode(text.replace(/[^0-9]/g, ''));
-                if (statusMessage) setStatusMessage(null);
-              }}
-              autoFocus={true}
-            />
-
-            {/* Hiển thị 6 ô số trực quan */}
-            <Pressable style={styles.otpRow} onPress={() => inputRef.current?.focus()}>
-              {Array.from({ length: 6 }).map((_, index) => {
-                const digit = inputCode[index] || '';
-                const isFocused = inputCode.length === index;
-                return (
-                  <View
-                    key={index}
-                    style={[
-                      styles.otpBox,
-                      digit ? styles.otpBoxFilled : null,
-                      isFocused ? styles.otpBoxFocused : null,
-                    ]}
-                  >
-                    <Text style={styles.otpDigit}>{digit}</Text>
-                  </View>
-                );
-              })}
-            </Pressable>
 
             <Pressable
               accessibilityRole="button"
-              style={({ pressed }) => [
-                styles.primaryButton,
-                pressed && { backgroundColor: PALETTE.primaryPressed },
-                (actionLoading || inputCode.length !== 6) && styles.buttonDisabled,
-              ]}
-              android_ripple={{ color: PALETTE.rippleLight }}
-              onPress={handleConnect}
-              disabled={actionLoading || inputCode.length !== 6}
+              style={styles.logoutButton}
+              android_ripple={{ color: PALETTE.rippleDark }}
+              onPress={logout}
             >
-              {actionLoading ? (
-                <ActivityIndicator color={PALETTE.surface} size="small" />
-              ) : (
-                <Text style={styles.primaryButtonText}>Xác nhận kết nối</Text>
-              )}
+              <Text style={styles.logoutText}>Đăng xuất khỏi tài khoản</Text>
             </Pressable>
           </View>
-        )}
-
-        <Pressable
-          accessibilityRole="button"
-          style={styles.logoutButton}
-          android_ripple={{ color: PALETTE.rippleDark }}
-          onPress={logout}
-        >
-          <Text style={styles.logoutText}>Đăng xuất khỏi tài khoản</Text>
-        </Pressable>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: PALETTE.background },
+  flexOne: { flex: 1 },
   scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
     paddingHorizontal: METRICS.paddingHorizontal,
-    paddingVertical: 24,
+  },
+  responsiveContainer: {
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
   },
   headerBlock: { marginBottom: 20 },
   badgeLabel: {
@@ -407,6 +462,7 @@ const styles = StyleSheet.create({
   tabButton: {
     flex: 1,
     height: 40,
+    paddingHorizontal: 8,
     justifyContent: 'center',
     alignItems: 'center',
     borderRadius: METRICS.radiusSm - 2,
@@ -438,6 +494,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
     elevation: 1,
+    width: '100%',
   },
   cardSubTitle: {
     fontSize: 14,
@@ -448,7 +505,7 @@ const styles = StyleSheet.create({
   },
 
   /* Tab 1: Share Code */
-  codeContainer: { alignItems: 'center' },
+  codeContainer: { alignItems: 'center', width: '100%' },
   codeBadge: {
     backgroundColor: '#FFF1F2',
     borderWidth: 1.5,
@@ -457,6 +514,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: METRICS.radiusMd,
     marginVertical: 8,
+    maxWidth: '100%',
+    alignItems: 'center',
   },
   codeDisplay: {
     fontSize: 36,
@@ -478,10 +537,11 @@ const styles = StyleSheet.create({
   },
   actionBtn: {
     flex: 1,
-    height: METRICS.minTouchTarget,
+    minHeight: METRICS.minTouchTarget,
     borderRadius: METRICS.radiusSm,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 10,
   },
   copyBtn: {
     backgroundColor: PALETTE.primaryContainer,
@@ -508,6 +568,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: PALETTE.textPrimary,
     marginBottom: 4,
+    textAlign: 'center',
   },
   emptyCodeDesc: {
     fontSize: 13,
@@ -516,7 +577,7 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
 
-  /* Tab 2: OTP Box UI */
+  /* Tab 2: OTP Box UI - Co giãn theo mọi chiều rộng màn hình */
   hiddenInput: {
     position: 'absolute',
     width: 1,
@@ -525,13 +586,16 @@ const styles = StyleSheet.create({
   },
   otpRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+    alignItems: 'center',
     marginBottom: 20,
     marginTop: 6,
+    width: '100%',
   },
   otpBox: {
-    width: 44,
-    height: 52,
+    flex: 1,
+    maxWidth: 52,
+    aspectRatio: 0.85,
     borderRadius: METRICS.radiusSm,
     borderWidth: 1.5,
     borderColor: PALETTE.outline,

@@ -9,6 +9,7 @@ import {
   ScrollView,
   Animated,
   ActivityIndicator,
+  useWindowDimensions,
 } from 'react-native';
 import { ThemeColors, METRICS } from '../../constants/theme';
 import {
@@ -50,6 +51,10 @@ export const DailyQASection: React.FC<DailyQASectionProps> = ({
   onRollQuestion,
   onSelectHistoryItem,
 }) => {
+  const { width: screenWidth } = useWindowDimensions();
+  const isSmallScreen = screenWidth < 360;
+  const isWideLayout = screenWidth >= 560;
+
   const [input, setInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -60,7 +65,6 @@ export const DailyQASection: React.FC<DailyQASectionProps> = ({
   const hasMyAnswer = Boolean(activeQA.myAnswer?.trim());
   const bothAnswered = activeQA.bothAnswered;
 
-  // Hiệu ứng bung mở tức thì khi cả hai hoàn thành câu trả lời qua WebSocket
   useEffect(() => {
     if (bothAnswered) {
       revealAnim.setValue(0.85);
@@ -125,9 +129,7 @@ export const DailyQASection: React.FC<DailyQASectionProps> = ({
               ]}
             />
             <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textPrimary }}>
-              {socketConnected
-                ? 'Đồng bộ tức thì (Live)'
-                : 'Chế độ chờ mạng'}
+              {socketConnected ? 'Đồng bộ tức thì (Live)' : 'Chế độ chờ mạng'}
             </Text>
           </View>
           <Text style={{ fontSize: 12, fontWeight: '700', color: colors.primary }}>
@@ -183,6 +185,7 @@ export const DailyQASection: React.FC<DailyQASectionProps> = ({
       <View
         style={[
           styles.mainQuestionCard,
+          isSmallScreen && { padding: 14 },
           { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
         ]}
       >
@@ -214,7 +217,13 @@ export const DailyQASection: React.FC<DailyQASectionProps> = ({
           </Pressable>
         </View>
 
-        <Text style={[styles.questionTitle, { color: colors.textPrimary }]}>
+        <Text
+          style={[
+            styles.questionTitle,
+            isSmallScreen && { fontSize: 15, lineHeight: 22 },
+            { color: colors.textPrimary },
+          ]}
+        >
           {activeQA.questionText}
         </Text>
 
@@ -253,51 +262,67 @@ export const DailyQASection: React.FC<DailyQASectionProps> = ({
             ]}
           >
             <View style={[styles.unlockedBanner, { backgroundColor: '#DCFCE7' }]}>
-              <Text style={{ fontSize: 12, fontWeight: '800', color: '#15803D' }}>
+              <Text
+                style={{
+                  fontSize: 12,
+                  fontWeight: '800',
+                  color: '#15803D',
+                  textAlign: 'center',
+                }}
+              >
                 🔓 Đã mở khóa! Cả hai bạn đã hoàn thành câu hỏi này
               </Text>
             </View>
 
-            <View style={[styles.answerBubble, { backgroundColor: colors.surfaceVariant }]}>
-              <View style={styles.bubbleHeader}>
-                <Text style={{ fontSize: 12, fontWeight: '800', color: colors.primary }}>
-                  {myNickname} (Bạn)
-                </Text>
-                {activeQA.answeredAt && (
-                  <Text style={{ fontSize: 10, color: colors.textSecondary }}>
-                    {activeQA.answeredAt.split('T')[0]}
+            <View style={[styles.answersPairWrap, isWideLayout && styles.answersPairRow]}>
+              <View
+                style={[
+                  styles.answerBubble,
+                  isWideLayout && { flex: 1 },
+                  { backgroundColor: colors.surfaceVariant },
+                ]}
+              >
+                <View style={styles.bubbleHeader}>
+                  <Text style={{ fontSize: 12, fontWeight: '800', color: colors.primary }}>
+                    {myNickname} (Bạn)
                   </Text>
-                )}
-              </View>
-              <Text style={[styles.answerBody, { color: colors.textPrimary }]}>
-                {activeQA.myAnswer}
-              </Text>
-            </View>
-
-            <View
-              style={[
-                styles.answerBubble,
-                {
-                  backgroundColor: `${currentCatMeta.accentColor}14`,
-                  borderColor: `${currentCatMeta.accentColor}40`,
-                  borderWidth: 1,
-                },
-              ]}
-            >
-              <View style={styles.bubbleHeader}>
-                <Text
-                  style={{
-                    fontSize: 12,
-                    fontWeight: '800',
-                    color: currentCatMeta.accentColor,
-                  }}
-                >
-                  💕 {partnerNickname}
+                  {activeQA.answeredAt && (
+                    <Text style={{ fontSize: 10, color: colors.textSecondary }}>
+                      {activeQA.answeredAt.split('T')[0]}
+                    </Text>
+                  )}
+                </View>
+                <Text style={[styles.answerBody, { color: colors.textPrimary }]}>
+                  {activeQA.myAnswer}
                 </Text>
               </View>
-              <Text style={[styles.answerBody, { color: colors.textPrimary }]}>
-                {activeQA.partnerAnswer}
-              </Text>
+
+              <View
+                style={[
+                  styles.answerBubble,
+                  isWideLayout && { flex: 1 },
+                  {
+                    backgroundColor: `${currentCatMeta.accentColor}14`,
+                    borderColor: `${currentCatMeta.accentColor}40`,
+                    borderWidth: 1,
+                  },
+                ]}
+              >
+                <View style={styles.bubbleHeader}>
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      fontWeight: '800',
+                      color: currentCatMeta.accentColor,
+                    }}
+                  >
+                    💕 {partnerNickname}
+                  </Text>
+                </View>
+                <Text style={[styles.answerBody, { color: colors.textPrimary }]}>
+                  {activeQA.partnerAnswer}
+                </Text>
+              </View>
             </View>
           </Animated.View>
         ) : hasMyAnswer ? (
@@ -318,7 +343,14 @@ export const DailyQASection: React.FC<DailyQASectionProps> = ({
                 { borderColor: colors.borderSubtle, backgroundColor: colors.background },
               ]}
             >
-              <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>
+              <Text
+                style={{
+                  fontSize: 13,
+                  fontWeight: '700',
+                  color: colors.textPrimary,
+                  textAlign: 'center',
+                }}
+              >
                 🔒 Đang chờ {partnerNickname} trả lời...
               </Text>
               <Text
@@ -335,7 +367,7 @@ export const DailyQASection: React.FC<DailyQASectionProps> = ({
             </View>
           </View>
         ) : (
-          /* TRẠNG THÁI 3: MÌNH CHƯA TRẢ LỜI (HIỆN Ô NHẬP + BÁO NẾU NGƯỜI KIA ĐÃ TRẢ LỜI) */
+          /* TRẠNG THÁI 3: MÌNH CHƯA TRẢ LỜI */
           <View style={{ marginTop: 14 }}>
             {activeQA.hasPartnerAnswered && (
               <View
@@ -344,7 +376,7 @@ export const DailyQASection: React.FC<DailyQASectionProps> = ({
                   { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' },
                 ]}
               >
-                <Text style={{ fontSize: 12, fontWeight: '800', color: '#B45309' }}>
+                <Text style={{ fontSize: 12, fontWeight: '800', color: '#B45309', lineHeight: 18 }}>
                   🔒 {partnerNickname} đã gửi câu trả lời rồi! Hãy nhập câu trả lời của bạn để mở khóa ngay lập tức.
                 </Text>
               </View>
@@ -519,7 +551,7 @@ export const DailyQASection: React.FC<DailyQASectionProps> = ({
 };
 
 const styles = StyleSheet.create({
-  container: { marginBottom: 28 },
+  container: { marginBottom: 28, width: '100%' },
   statsBanner: {
     borderRadius: METRICS.radiusMd,
     padding: 12,
@@ -528,8 +560,10 @@ const styles = StyleSheet.create({
   },
   statsTopRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 6,
     marginBottom: 8,
   },
   liveBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -550,8 +584,10 @@ const styles = StyleSheet.create({
   },
   cardHeaderRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
   },
   topicTag: {
     paddingHorizontal: 10,
@@ -589,14 +625,23 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
   },
+  answersPairWrap: {
+    gap: 10,
+  },
+  answersPairRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
   answerBubble: {
     padding: 12,
     borderRadius: 12,
   },
   bubbleHeader: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 4,
     marginBottom: 4,
   },
   answerBody: { fontSize: 14, lineHeight: 20 },
@@ -625,21 +670,24 @@ const styles = StyleSheet.create({
   },
   submitBtn: {
     minHeight: 42,
+    paddingHorizontal: 14,
     borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 10,
   },
-  submitBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  submitBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700', textAlign: 'center' },
   historySection: { marginTop: 20 },
   historyHeaderRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
     marginBottom: 10,
   },
   historyTitle: { fontSize: 15, fontWeight: '700' },
-  historyFilterRow: { flexDirection: 'row', gap: 6 },
+  historyFilterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   miniFilterChip: {
     paddingHorizontal: 10,
     paddingVertical: 5,

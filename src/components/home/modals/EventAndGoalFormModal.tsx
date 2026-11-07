@@ -12,6 +12,7 @@ import {
   Switch,
   Alert,
   ActivityIndicator,
+  useWindowDimensions,
 } from 'react-native';
 import { DateTimeField } from './DateTimeField';
 import * as Haptics from 'expo-haptics';
@@ -40,7 +41,6 @@ import {
 } from './modalConstantsAndUtils';
 import { styles } from './modalSharedStyles';
 
-// Alert.alert của React Native không hiển thị gì trên web, nên dùng window.alert ở đó.
 const showAlert = (title: string, message: string) => {
   if (Platform.OS === 'web') {
     window.alert(`${title}\n\n${message}`);
@@ -76,6 +76,10 @@ export const EventAndGoalFormModal: React.FC<{
   onSaveEvent,
   onSaveGoal,
 }) => {
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const isSmallScreen = screenWidth < 360;
+  const isLargeScreen = screenWidth >= 640;
+
   const { momoFund } = useSettingsStore();
   const isMomoGlobalEnabled = (momoFund as any)?.enabled !== false;
 
@@ -114,7 +118,6 @@ export const EventAndGoalFormModal: React.FC<{
   const [stopTitle, setStopTitle] = useState('');
   const [stopAddress, setStopAddress] = useState('');
 
-  // Quản lý các Date/Time Pickers Native
   const [activePicker, setActivePicker] = useState<
     'DATE' | 'START_TIME' | 'END_TIME' | 'STOP_TIME' | null
   >(null);
@@ -248,7 +251,6 @@ export const EventAndGoalFormModal: React.FC<{
     void Haptics.selectionAsync().catch(() => {});
   };
 
-  // Thêm điểm dừng và tự động sắp xếp theo thứ tự thời gian tăng dần
   const handleAddStop = () => {
     if (!stopTitle.trim()) {
       showAlert('Thiếu thông tin', 'Vui lòng nhập tên quán hoặc hoạt động của chặng này.');
@@ -301,7 +303,6 @@ export const EventAndGoalFormModal: React.FC<{
     void Haptics.selectionAsync().catch(() => {});
   };
 
-  // Việc lên lịch thông báo đã được saveEvent xử lý, không lên lịch lại ở đây để tránh trùng.
   const handleSubmit = async () => {
     const cleanTitle = title.trim();
     if (!cleanTitle) {
@@ -326,7 +327,9 @@ export const EventAndGoalFormModal: React.FC<{
 
       if (hmToMinutes(endTimeHm) <= lastMins) {
         const lastLabel =
-          stops.length > 0 ? `chặng cuối (${stops[stops.length - 1].timeHm})` : `giờ hẹn (${startTimeHm})`;
+          stops.length > 0
+            ? `chặng cuối (${stops[stops.length - 1].timeHm})`
+            : `giờ hẹn (${startTimeHm})`;
         showAlert(
           'Giờ về chưa hợp lệ',
           `Giờ về dự kiến (${endTimeHm}) phải diễn ra sau ${lastLabel}. Nếu chưa xác định giờ về, bạn có thể gạt tắt mục Giờ về dự kiến.`,
@@ -342,7 +345,9 @@ export const EventAndGoalFormModal: React.FC<{
         const budgetNum = Number(estimatedBudget.replace(/[^0-9]/g, '')) || undefined;
 
         const summaryFallback = isDatePlan
-          ? `${locationName ? `${locationName}` : ''}${address ? ` (${address})` : ''}${transportNote ? ` • ${transportNote}` : ''}`.trim()
+          ? `${locationName ? `${locationName}` : ''}${address ? ` (${address})` : ''}${
+              transportNote ? ` • ${transportNote}` : ''
+            }`.trim()
           : customMsg.trim();
 
         const datePlanPayload = isDatePlan
@@ -374,9 +379,7 @@ export const EventAndGoalFormModal: React.FC<{
             aiTone,
             autoDailyAi: isDatePlan ? false : autoDailyAi,
             customMessage:
-              !isDatePlan && autoDailyAi
-                ? ''
-                : customMsg.trim() || summaryFallback,
+              !isDatePlan && autoDailyAi ? '' : customMsg.trim() || summaryFallback,
             datePlan: datePlanPayload,
           },
           editingEvent?.id,
@@ -416,13 +419,39 @@ export const EventAndGoalFormModal: React.FC<{
     [transport],
   );
 
+  const responsiveSheetStyle = {
+    width: '100%' as const,
+    maxWidth: isLargeScreen ? 620 : ('100%' as const),
+    maxHeight: Math.round(screenHeight * (isLargeScreen ? 0.88 : 0.92)),
+    alignSelf: 'center' as const,
+    borderBottomLeftRadius: isLargeScreen ? 24 : 0,
+    borderBottomRightRadius: isLargeScreen ? 24 : 0,
+    marginBottom: isLargeScreen ? 20 : 0,
+    paddingHorizontal: isSmallScreen ? 14 : 20,
+  };
+
+  const stepperTimeColStyle = [
+    styles.stepperTimeCol,
+    isSmallScreen && { width: 54, paddingRight: 6 },
+  ];
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        style={[styles.backdrop, { backgroundColor: colors.backdrop }]}
+        style={[
+          styles.backdrop,
+          { backgroundColor: colors.backdrop },
+          isLargeScreen && { justifyContent: 'center', padding: 16 },
+        ]}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={[styles.sheetCard, { backgroundColor: colors.surface }]}>
+        <View
+          style={[
+            styles.sheetCard,
+            { backgroundColor: colors.surface },
+            responsiveSheetStyle,
+          ]}
+        >
           <View style={styles.sheetDragHandle} />
           <Text style={[styles.sheetTitle, { color: colors.textPrimary }]}>
             {mode === 'EVENT'
@@ -472,7 +501,7 @@ export const EventAndGoalFormModal: React.FC<{
                       <Text
                         style={{
                           fontWeight: active ? '700' : '500',
-                          fontSize: 13,
+                          fontSize: isSmallScreen ? 12 : 13,
                           color: active ? colors.textPrimary : colors.textSecondary,
                         }}
                         numberOfLines={1}
@@ -491,7 +520,10 @@ export const EventAndGoalFormModal: React.FC<{
                 : 'Tên gọi'}
             </Text>
             <TextInput
-              style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+              style={[
+                styles.inputBox,
+                { borderColor: colors.outline, color: colors.textPrimary },
+              ]}
               placeholder={
                 mode === 'EVENT'
                   ? category === 'DATE_PLAN'
@@ -505,9 +537,18 @@ export const EventAndGoalFormModal: React.FC<{
             />
 
             {/* Chọn Ngày & Giờ Bắt đầu */}
-            <View style={[styles.twoColFormRow, { marginBottom: 14 }]}>
+            <View
+              style={[
+                styles.twoColFormRow,
+                { marginBottom: 14 },
+                isSmallScreen && { flexDirection: 'column', alignItems: 'stretch' },
+              ]}
+            >
               <View style={styles.colItem}>
-                <Text style={[styles.fieldLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                <Text
+                  style={[styles.fieldLabel, { color: colors.textSecondary }]}
+                  numberOfLines={1}
+                >
                   {mode === 'EVENT' && category === 'DATE_PLAN' ? 'Ngày hẹn' : 'Ngày diễn ra'}
                 </Text>
                 <Pressable
@@ -521,7 +562,10 @@ export const EventAndGoalFormModal: React.FC<{
               </View>
 
               <View style={styles.colItem}>
-                <Text style={[styles.fieldLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                <Text
+                  style={[styles.fieldLabel, { color: colors.textSecondary }]}
+                  numberOfLines={1}
+                >
                   {mode === 'EVENT' && category === 'DATE_PLAN' ? 'Giờ bắt đầu / Đón' : 'Giờ nhắc'}
                 </Text>
                 <Pressable
@@ -548,15 +592,14 @@ export const EventAndGoalFormModal: React.FC<{
               </View>
             </View>
 
-            {/* ===================================================== */}
             {/* GIAO DIỆN LẬP KẾ HOẠCH ĐI CHƠI (DATE_PLAN) */}
-            {/* ===================================================== */}
             {mode === 'EVENT' && category === 'DATE_PLAN' && (
               <View>
                 {/* KHỐI 1: THỜI GIAN VỀ & LỜI NHẮC THÔNG BÁO */}
                 <View
                   style={[
                     styles.cleanSectionCard,
+                    isSmallScreen && { padding: 12 },
                     {
                       backgroundColor: colors.surface,
                       borderColor: colors.borderSubtle,
@@ -567,7 +610,6 @@ export const EventAndGoalFormModal: React.FC<{
                     Thời gian & Lời nhắc
                   </Text>
 
-                  {/* Bật / tắt Giờ về dự kiến */}
                   <View style={styles.switchRow}>
                     <View style={{ flex: 1, paddingRight: 10 }}>
                       <Text style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary }}>
@@ -590,8 +632,10 @@ export const EventAndGoalFormModal: React.FC<{
                     <View
                       style={{
                         flexDirection: 'row',
+                        flexWrap: 'wrap',
                         alignItems: 'center',
                         justifyContent: 'space-between',
+                        gap: 8,
                         backgroundColor: colors.surfaceVariant,
                         paddingHorizontal: 14,
                         paddingVertical: 10,
@@ -624,7 +668,6 @@ export const EventAndGoalFormModal: React.FC<{
                     ]}
                   />
 
-                  {/* Bật / tắt thông báo nhắc Giờ hẹn */}
                   <View style={styles.switchRow}>
                     <View style={{ flex: 1, paddingRight: 10 }}>
                       <Text style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary }}>
@@ -679,7 +722,6 @@ export const EventAndGoalFormModal: React.FC<{
                     </View>
                   )}
 
-                  {/* Bật / tắt thông báo nhắc Giờ về (chỉ hiện khi bật Giờ về dự kiến) */}
                   {enableEndTime && (
                     <>
                       <View
@@ -690,7 +732,9 @@ export const EventAndGoalFormModal: React.FC<{
                       />
                       <View style={styles.switchRow}>
                         <View style={{ flex: 1, paddingRight: 10 }}>
-                          <Text style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary }}>
+                          <Text
+                            style={{ fontSize: 14, fontWeight: '600', color: colors.textPrimary }}
+                          >
                             Thông báo nhắc giờ về ({toHmString(endTimeDate)})
                           </Text>
                           <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>
@@ -710,10 +754,11 @@ export const EventAndGoalFormModal: React.FC<{
                   )}
                 </View>
 
-                {/* KHỐI 2: SƠ ĐỒ CHẶNG TIẾN TRÌNH DỌC (MODERN VERTICAL STEPPER) */}
+                {/* KHỐI 2: SƠ ĐỒ CHẶNG TIẾN TRÌNH DỌC */}
                 <View
                   style={[
                     styles.cleanSectionCard,
+                    isSmallScreen && { padding: 12 },
                     {
                       backgroundColor: colors.surface,
                       borderColor: colors.borderSubtle,
@@ -723,11 +768,21 @@ export const EventAndGoalFormModal: React.FC<{
                   <View
                     style={[
                       styles.sectionHeaderRow,
-                      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+                      {
+                        flexDirection: 'row',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      },
                     ]}
                   >
-                    <View style={{ flex: 1, minWidth: 0, paddingRight: 10 }}>
-                      <Text style={[styles.cleanSectionTitle, { color: colors.textPrimary, marginBottom: 2 }]}>
+                    <View style={{ flex: 1, minWidth: 150, paddingRight: 8 }}>
+                      <Text
+                        style={[
+                          styles.cleanSectionTitle,
+                          { color: colors.textPrimary, marginBottom: 2 },
+                        ]}
+                      >
                         Tiến trình buổi hẹn
                       </Text>
                       <Text style={{ fontSize: 12, color: colors.textSecondary }}>
@@ -765,11 +820,10 @@ export const EventAndGoalFormModal: React.FC<{
                     </Pressable>
                   </View>
 
-                  {/* Sơ đồ trục dọc (Vertical Stepper) */}
                   <View style={styles.verticalStepperContainer}>
                     {/* NODE ĐẦU: GIỜ BẮT ĐẦU / ĐÓN */}
                     <View style={styles.stepperRow}>
-                      <View style={styles.stepperTimeCol}>
+                      <View style={stepperTimeColStyle}>
                         <Pressable
                           style={[
                             styles.stepperTimeBadge,
@@ -828,7 +882,9 @@ export const EventAndGoalFormModal: React.FC<{
                         ]}
                       >
                         <View style={styles.stepperCardHeader}>
-                          <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>
+                          <Text
+                            style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}
+                          >
                             Bắt đầu • {selectedTransportObj.label}
                           </Text>
                         </View>
@@ -848,11 +904,12 @@ export const EventAndGoalFormModal: React.FC<{
                     {/* CÁC NODE CHẶNG GIỮA */}
                     {stops.map((st, idx) => {
                       const isLastNode = idx === stops.length - 1 && !enableEndTime;
-                      const meta = STOP_ACTIVITY_LABELS[st.activityType] || STOP_ACTIVITY_LABELS.OTHER;
+                      const meta =
+                        STOP_ACTIVITY_LABELS[st.activityType] || STOP_ACTIVITY_LABELS.OTHER;
 
                       return (
                         <View key={st.id} style={styles.stepperRow}>
-                          <View style={styles.stepperTimeCol}>
+                          <View style={stepperTimeColStyle}>
                             <View
                               style={[
                                 styles.stepperTimeBadge,
@@ -926,6 +983,7 @@ export const EventAndGoalFormModal: React.FC<{
                                   fontWeight: '700',
                                   color: colors.textPrimary,
                                   flex: 1,
+                                  minWidth: 90,
                                 }}
                                 numberOfLines={1}
                               >
@@ -936,7 +994,9 @@ export const EventAndGoalFormModal: React.FC<{
                                 hitSlop={10}
                                 style={styles.removeStopIconBtn}
                               >
-                                <Text style={{ fontSize: 12, fontWeight: '700', color: colors.error }}>
+                                <Text
+                                  style={{ fontSize: 12, fontWeight: '700', color: colors.error }}
+                                >
                                   Xóa
                                 </Text>
                               </Pressable>
@@ -946,6 +1006,7 @@ export const EventAndGoalFormModal: React.FC<{
                               <View
                                 style={{
                                   flexDirection: 'row',
+                                  flexWrap: 'wrap',
                                   alignItems: 'center',
                                   justifyContent: 'space-between',
                                   marginTop: 6,
@@ -983,10 +1044,10 @@ export const EventAndGoalFormModal: React.FC<{
                       );
                     })}
 
-                    {/* NODE CUỐI: GIỜ VỀ DỰ KIẾN (CHỈ HIỂN THỊ KHI BẬT) */}
+                    {/* NODE CUỐI: GIỜ VỀ DỰ KIẾN */}
                     {enableEndTime && (
                       <View style={[styles.stepperRow, { marginBottom: 0 }]}>
-                        <View style={styles.stepperTimeCol}>
+                        <View style={stepperTimeColStyle}>
                           <Pressable
                             style={[
                               styles.stepperTimeBadge,
@@ -1015,7 +1076,10 @@ export const EventAndGoalFormModal: React.FC<{
                           <View
                             style={[
                               styles.stepperDotOuter,
-                              { borderColor: colors.textSecondary, backgroundColor: colors.surface },
+                              {
+                                borderColor: colors.textSecondary,
+                                backgroundColor: colors.surface,
+                              },
                             ]}
                           >
                             <View
@@ -1044,7 +1108,12 @@ export const EventAndGoalFormModal: React.FC<{
                             ]}
                           >
                             <Text
-                              style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary, flex: 1 }}
+                              style={{
+                                fontSize: 13,
+                                fontWeight: '700',
+                                color: colors.textPrimary,
+                                flex: 1,
+                              }}
                               numberOfLines={1}
                             >
                               Kết thúc & Đưa nhau về
@@ -1056,7 +1125,11 @@ export const EventAndGoalFormModal: React.FC<{
                             >
                               <Text
                                 numberOfLines={1}
-                                style={{ fontSize: 11, fontWeight: '600', color: colors.textSecondary }}
+                                style={{
+                                  fontSize: 11,
+                                  fontWeight: '600',
+                                  color: colors.textSecondary,
+                                }}
                               >
                                 Ẩn giờ về
                               </Text>
@@ -1072,7 +1145,7 @@ export const EventAndGoalFormModal: React.FC<{
                     )}
                   </View>
 
-                  {/* FORM THÊM CHẶNG MỚI (MỞ KHI BẤM + THÊM CHẶNG) */}
+                  {/* FORM THÊM CHẶNG MỚI */}
                   {showAddStopCreator && (
                     <View
                       style={[
@@ -1083,11 +1156,25 @@ export const EventAndGoalFormModal: React.FC<{
                         },
                       ]}
                     >
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary, marginBottom: 10 }}>
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          fontWeight: '700',
+                          color: colors.textPrimary,
+                          marginBottom: 10,
+                        }}
+                      >
                         Thêm điểm dừng mới vào tiến trình
                       </Text>
 
-                      <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12 }}>
+                      <View
+                        style={{
+                          flexDirection: 'row',
+                          flexWrap: 'wrap',
+                          gap: 6,
+                          marginBottom: 12,
+                        }}
+                      >
                         {(
                           [
                             { id: 'EAT', label: 'Ăn uống' },
@@ -1103,8 +1190,9 @@ export const EventAndGoalFormModal: React.FC<{
                               style={[
                                 styles.compactChoicePill,
                                 {
-                                  flex: 1,
-                                  paddingHorizontal: 4,
+                                  flexGrow: 1,
+                                  minWidth: isSmallScreen ? '46%' : 72,
+                                  paddingHorizontal: 8,
                                   borderColor: selected ? colors.primary : colors.outline,
                                   backgroundColor: selected ? colors.primary : colors.surface,
                                 },
@@ -1126,8 +1214,13 @@ export const EventAndGoalFormModal: React.FC<{
                         })}
                       </View>
 
-                      <View style={styles.twoColFormRow}>
-                        <View style={{ width: 96 }}>
+                      <View
+                        style={[
+                          styles.twoColFormRow,
+                          isSmallScreen && { flexDirection: 'column', alignItems: 'stretch' },
+                        ]}
+                      >
+                        <View style={isSmallScreen ? { width: '100%' } : { width: 104 }}>
                           <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
                             Giờ chặng
                           </Text>
@@ -1155,7 +1248,7 @@ export const EventAndGoalFormModal: React.FC<{
                           </Pressable>
                         </View>
 
-                        <View style={{ flex: 1 }}>
+                        <View style={{ flex: 1, minWidth: 160 }}>
                           <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
                             Tên quán / Hoạt động
                           </Text>
@@ -1200,18 +1293,24 @@ export const EventAndGoalFormModal: React.FC<{
                         <Pressable
                           style={[
                             styles.secondaryBtn,
-                            { backgroundColor: colors.surface, height: 42 },
+                            { backgroundColor: colors.surface, minHeight: 42 },
                           ]}
                           onPress={() => setShowAddStopCreator(false)}
                         >
-                          <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
+                          <Text
+                            style={{
+                              color: colors.textSecondary,
+                              fontSize: 13,
+                              fontWeight: '600',
+                            }}
+                          >
                             Hủy
                           </Text>
                         </Pressable>
                         <Pressable
                           style={[
                             styles.primaryBtn,
-                            { backgroundColor: colors.primary, height: 42 },
+                            { backgroundColor: colors.primary, minHeight: 42 },
                           ]}
                           onPress={handleAddStop}
                         >
@@ -1228,6 +1327,7 @@ export const EventAndGoalFormModal: React.FC<{
                 <View
                   style={[
                     styles.cleanSectionCard,
+                    isSmallScreen && { padding: 12 },
                     {
                       backgroundColor: colors.surface,
                       borderColor: colors.borderSubtle,
@@ -1317,10 +1417,14 @@ export const EventAndGoalFormModal: React.FC<{
                   />
 
                   <View style={styles.sectionHeaderWrap}>
-                    <Text style={[styles.fieldLabel, { color: colors.textSecondary, marginBottom: 0 }]}>
+                    <Text
+                      style={[styles.fieldLabel, { color: colors.textSecondary, marginBottom: 0 }]}
+                    >
                       Quán / Địa điểm chính
                     </Text>
-                    {(Boolean(address.trim()) || Boolean(locationName.trim()) || Boolean(googleMapsUrl.trim())) && (
+                    {(Boolean(address.trim()) ||
+                      Boolean(locationName.trim()) ||
+                      Boolean(googleMapsUrl.trim())) && (
                       <Pressable
                         onPress={() =>
                           void openAddressInGoogleMaps(
@@ -1392,7 +1496,10 @@ export const EventAndGoalFormModal: React.FC<{
                       Dự trù chi phí (VNĐ)
                     </Text>
                     <TextInput
-                      style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                      style={[
+                        styles.inputBox,
+                        { borderColor: colors.outline, color: colors.textPrimary },
+                      ]}
                       keyboardType="numeric"
                       placeholder="VD: 500000"
                       placeholderTextColor={colors.textSecondary}
@@ -1406,7 +1513,10 @@ export const EventAndGoalFormModal: React.FC<{
                   Lời nhắn / Trang phục gợi ý
                 </Text>
                 <TextInput
-                  style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary, marginBottom: 4 }]}
+                  style={[
+                    styles.inputBox,
+                    { borderColor: colors.outline, color: colors.textPrimary, marginBottom: 4 },
+                  ]}
                   placeholder="VD: Mặc đồ tone trắng chụp ảnh cho hợp nhé"
                   placeholderTextColor={colors.textSecondary}
                   value={customMsg}
@@ -1439,7 +1549,8 @@ export const EventAndGoalFormModal: React.FC<{
                         style={{
                           fontSize: 12,
                           fontWeight: '600',
-                          color: notifyDaysBefore === opt.value ? '#FFF' : colors.textSecondary,
+                          color:
+                            notifyDaysBefore === opt.value ? '#FFF' : colors.textSecondary,
                         }}
                       >
                         {opt.label}
@@ -1450,7 +1561,15 @@ export const EventAndGoalFormModal: React.FC<{
 
                 <View style={[styles.aiGeneratorBox, { backgroundColor: colors.surfaceVariant }]}>
                   <View style={styles.switchRow}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.textPrimary, flex: 1, paddingRight: 8 }}>
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        fontWeight: '600',
+                        color: colors.textPrimary,
+                        flex: 1,
+                        paddingRight: 8,
+                      }}
+                    >
                       Tự động soạn lời nhắc theo ngày
                     </Text>
                     <Switch value={autoDailyAi} onValueChange={setAutoDailyAi} />
@@ -1474,7 +1593,8 @@ export const EventAndGoalFormModal: React.FC<{
                             style={{
                               fontSize: 12,
                               fontWeight: '600',
-                              color: aiTone === item.tone ? colors.surface : colors.textSecondary,
+                              color:
+                                aiTone === item.tone ? colors.surface : colors.textSecondary,
                             }}
                           >
                             {item.label}
@@ -1510,9 +1630,22 @@ export const EventAndGoalFormModal: React.FC<{
             {mode === 'GOAL' && (
               <>
                 {isMomoGlobalEnabled && (
-                  <View style={[styles.aiGeneratorBox, { backgroundColor: colors.surfaceVariant, marginTop: 4 }]}>
+                  <View
+                    style={[
+                      styles.aiGeneratorBox,
+                      { backgroundColor: colors.surfaceVariant, marginTop: 4 },
+                    ]}
+                  >
                     <View style={styles.switchRow}>
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#A50064', flex: 1, paddingRight: 8 }}>
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          fontWeight: '700',
+                          color: '#A50064',
+                          flex: 1,
+                          paddingRight: 8,
+                        }}
+                      >
                         Liên kết Quỹ tiết kiệm MoMo (Tính % theo số tiền)
                       </Text>
                       <Switch
@@ -1531,11 +1664,19 @@ export const EventAndGoalFormModal: React.FC<{
                         </Text>
                         <Text style={{ fontSize: 13, fontWeight: '800', color: '#A50064' }}>
                           {livePercentage.toFixed(1)}% ({numericCurrent.toLocaleString('vi-VN')}{' '}
-                          {isMomoLinked ? 'đ' : unitLabel} / {numericTarget.toLocaleString('vi-VN')}{' '}
+                          {isMomoLinked ? 'đ' : unitLabel} /{' '}
+                          {numericTarget.toLocaleString('vi-VN')}{' '}
                           {isMomoLinked ? 'đ' : unitLabel})
                         </Text>
                       </View>
-                      <View style={{ height: 8, borderRadius: 4, backgroundColor: colors.surface, overflow: 'hidden' }}>
+                      <View
+                        style={{
+                          height: 8,
+                          borderRadius: 4,
+                          backgroundColor: colors.surface,
+                          overflow: 'hidden',
+                        }}
+                      >
                         <View
                           style={{
                             height: '100%',
@@ -1545,7 +1686,9 @@ export const EventAndGoalFormModal: React.FC<{
                         />
                       </View>
                       {isMomoLinked && (
-                        <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 8 }}>
+                        <Text
+                          style={{ fontSize: 12, color: colors.textSecondary, marginTop: 8 }}
+                        >
                           Còn cần tích lũy thêm: {remainingMoney.toLocaleString('vi-VN')}đ
                         </Text>
                       )}
@@ -1553,13 +1696,24 @@ export const EventAndGoalFormModal: React.FC<{
                   </View>
                 )}
 
-                <View style={styles.twoColFormRow}>
+                <View
+                  style={[
+                    styles.twoColFormRow,
+                    isSmallScreen && { flexDirection: 'column', alignItems: 'stretch' },
+                  ]}
+                >
                   <View style={styles.colItem}>
-                    <Text style={[styles.fieldLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                    <Text
+                      style={[styles.fieldLabel, { color: colors.textSecondary }]}
+                      numberOfLines={1}
+                    >
                       {isMomoGlobalEnabled && isMomoLinked ? 'Đã có (VNĐ)' : 'Hiện tại'}
                     </Text>
                     <TextInput
-                      style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                      style={[
+                        styles.inputBox,
+                        { borderColor: colors.outline, color: colors.textPrimary },
+                      ]}
                       keyboardType="numeric"
                       placeholder="0"
                       value={currentAmount}
@@ -1567,11 +1721,17 @@ export const EventAndGoalFormModal: React.FC<{
                     />
                   </View>
                   <View style={styles.colItem}>
-                    <Text style={[styles.fieldLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                    <Text
+                      style={[styles.fieldLabel, { color: colors.textSecondary }]}
+                      numberOfLines={1}
+                    >
                       {isMomoGlobalEnabled && isMomoLinked ? 'Mục tiêu (VNĐ)' : 'Mục tiêu'}
                     </Text>
                     <TextInput
-                      style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                      style={[
+                        styles.inputBox,
+                        { borderColor: colors.outline, color: colors.textPrimary },
+                      ]}
                       keyboardType="numeric"
                       placeholder="5000000"
                       value={targetAmount}
@@ -1582,9 +1742,14 @@ export const EventAndGoalFormModal: React.FC<{
 
                 {(!isMomoGlobalEnabled || !isMomoLinked) && (
                   <>
-                    <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Đơn vị</Text>
+                    <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+                      Đơn vị
+                    </Text>
                     <TextInput
-                      style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                      style={[
+                        styles.inputBox,
+                        { borderColor: colors.outline, color: colors.textPrimary },
+                      ]}
                       placeholder="buổi, cuốn, %..."
                       value={unitLabel}
                       onChangeText={setUnitLabel}
@@ -1596,7 +1761,10 @@ export const EventAndGoalFormModal: React.FC<{
                   Ghi chú mục tiêu
                 </Text>
                 <TextInput
-                  style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                  style={[
+                    styles.inputBox,
+                    { borderColor: colors.outline, color: colors.textPrimary },
+                  ]}
                   placeholder="Ghi chú thêm cho mục tiêu này"
                   placeholderTextColor={colors.textSecondary}
                   value={customMsg}
@@ -1606,7 +1774,6 @@ export const EventAndGoalFormModal: React.FC<{
             )}
           </ScrollView>
 
-          {/* QUẢN LÝ TẤT CẢ DATE/TIME PICKERS NATIVE */}
           <DateTimeField
             visible={activePicker !== null}
             mode={activePicker === 'DATE' ? 'date' : 'time'}
@@ -1644,7 +1811,9 @@ export const EventAndGoalFormModal: React.FC<{
               onPress={onClose}
               disabled={submitting}
             >
-              <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: 14 }}>Hủy</Text>
+              <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: 14 }}>
+                Hủy
+              </Text>
             </Pressable>
             <Pressable
               style={[styles.primaryBtn, { backgroundColor: colors.primary }]}

@@ -11,6 +11,8 @@ import {
   ActivityIndicator,
   StyleSheet,
   ListRenderItemInfo,
+  Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemeColors } from '../../constants/theme';
@@ -47,9 +49,11 @@ export const LocketReactionSheet: React.FC<LocketReactionSheetProps> = ({
   onDeleteSnap,
 }) => {
   const insets = useSafeAreaInsets();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const isLargeScreen = screenWidth >= 600;
+
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Giữ ảnh cuối cùng để nội dung không biến mất giữa chừng khi sheet trượt xuống
   const lastSnapRef = useRef<LocketSnapView | null>(null);
   if (snap) lastSnapRef.current = snap;
   const shown = snap ?? lastSnapRef.current;
@@ -63,34 +67,51 @@ export const LocketReactionSheet: React.FC<LocketReactionSheetProps> = ({
   const runs = useMemo(() => (reactions ? buildReactionRuns(reactions) : []), [reactions, total]);
   const maxCount = summary.reduce((max, item) => Math.max(max, item.count), 1);
 
-  // Chỉ chủ ảnh thấy nút xóa. Người còn lại không có nút này trên màn hình.
   const canDelete = Boolean(onDeleteSnap) && canDeleteSnap(shown, viewerId);
+
+  const performDelete = useCallback(
+    async (snapId: string) => {
+      if (!onDeleteSnap) return;
+      setIsDeleting(true);
+      try {
+        await onDeleteSnap(snapId);
+        onClose();
+      } catch {
+        if (Platform.OS === 'web') {
+          window.alert('Chưa xóa được ảnh. Hãy kiểm tra kết nối mạng rồi thử lại.');
+        } else {
+          Alert.alert('Chưa xóa được ảnh', 'Hãy kiểm tra kết nối mạng rồi thử lại.');
+        }
+      } finally {
+        setIsDeleting(false);
+      }
+    },
+    [onDeleteSnap, onClose],
+  );
 
   const handleDelete = useCallback(() => {
     if (!shown || !onDeleteSnap || isDeleting) return;
-    // Kiểm tra lại ngay lúc bấm, phòng trường hợp props đổi giữa chừng
     if (!canDeleteSnap(shown, viewerId)) return;
 
     const snapId = shown.id;
+
+    if (Platform.OS === 'web') {
+      const ok = window.confirm(
+        'Xóa ảnh này?\nẢnh sẽ bị xóa khỏi nhật ký Locket và không khôi phục được.',
+      );
+      if (ok) void performDelete(snapId);
+      return;
+    }
+
     Alert.alert('Xóa ảnh này?', 'Ảnh sẽ bị xóa khỏi nhật ký Locket và không khôi phục được.', [
       { text: 'Giữ lại', style: 'cancel' },
       {
         text: 'Xóa',
         style: 'destructive',
-        onPress: async () => {
-          setIsDeleting(true);
-          try {
-            await onDeleteSnap(snapId);
-            onClose();
-          } catch {
-            Alert.alert('Chưa xóa được ảnh', 'Hãy kiểm tra kết nối mạng rồi thử lại.');
-          } finally {
-            setIsDeleting(false);
-          }
-        },
+        onPress: () => void performDelete(snapId),
       },
     ]);
-  }, [shown, onDeleteSnap, viewerId, isDeleting, onClose]);
+  }, [shown, onDeleteSnap, viewerId, isDeleting, performDelete]);
 
   const renderRun = useCallback(
     ({ item, index }: ListRenderItemInfo<ReactionRun>) => (
@@ -175,7 +196,12 @@ export const LocketReactionSheet: React.FC<LocketReactionSheetProps> = ({
       statusBarTranslucent
       onRequestClose={onClose}
     >
-      <View style={styles.root}>
+      <View
+        style={[
+          styles.root,
+          isLargeScreen && { justifyContent: 'center', padding: 16 },
+        ]}
+      >
         <Pressable
           accessibilityLabel="Đóng chi tiết cảm xúc"
           style={[StyleSheet.absoluteFill, { backgroundColor: colors.backdrop }]}
@@ -184,7 +210,13 @@ export const LocketReactionSheet: React.FC<LocketReactionSheetProps> = ({
         <View
           style={[
             styles.sheet,
-            { backgroundColor: colors.surface, paddingBottom: Math.max(insets.bottom, 12) },
+            {
+              backgroundColor: colors.surface,
+              maxHeight: Math.round(screenHeight * 0.82),
+              paddingBottom: isLargeScreen ? 16 : Math.max(insets.bottom, 12),
+              borderBottomLeftRadius: isLargeScreen ? 22 : 0,
+              borderBottomRightRadius: isLargeScreen ? 22 : 0,
+            },
           ]}
         >
           <View style={[styles.grabber, { backgroundColor: colors.borderSubtle }]} />
@@ -227,9 +259,14 @@ export const LocketReactionSheet: React.FC<LocketReactionSheetProps> = ({
 };
 
 const styles = StyleSheet.create({
-  root: { flex: 1, justifyContent: 'flex-end' },
+  root: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
   sheet: {
-    maxHeight: '80%',
+    width: '100%',
+    maxWidth: 520,
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     paddingHorizontal: 16,

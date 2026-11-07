@@ -23,8 +23,8 @@ export interface LocketSnapView {
  * Chuẩn hóa chuỗi (String + trim) để tránh lỗi lệch kiểu dữ liệu hoặc dư khoảng trắng.
  */
 export function canDeleteSnap(
-    snap: Pick<LocketSnapView, 'ownerId'> | null | undefined,
-    viewerId: string | null | undefined,
+  snap: Pick<LocketSnapView, 'ownerId'> | null | undefined,
+  viewerId: string | null | undefined,
 ): boolean {
   const owner = snap?.ownerId ? String(snap.ownerId).trim() : '';
   const viewer = viewerId ? String(viewerId).trim() : '';
@@ -32,12 +32,20 @@ export function canDeleteSnap(
   return owner === viewer;
 }
 
+/** Tự động điều chỉnh số chip cảm xúc hiển thị trên thanh tóm tắt tùy độ rộng màn hình */
+export function getResponsiveMaxVisibleChips(screenWidth: number): number {
+  if (screenWidth < 350) return 3;
+  if (screenWidth >= 520) return 6;
+  return 4;
+}
+
 /** Bỏ ký tự chọn biến thể emoji (U+FE0F) để "❤" và "❤️" được tính là một. */
-export const normalizeEmoji = (emoji: unknown): string => toEmojiString(emoji).replace(/\uFE0F/g, '');
+export const normalizeEmoji = (emoji: unknown): string =>
+  toEmojiString(emoji).replace(/\uFE0F/g, '');
 
 /**
- * \u00C9p m\u1ED9t ph\u1EA7n t\u1EED reaction b\u1EA5t k\u1EF3 v\u1EC1 chu\u1ED7i emoji.
- * Ch\u1EA5p nh\u1EADn chu\u1ED7i, ho\u1EB7c object d\u1EA1ng { emoji } t\u1EEB server / cache c\u0169; m\u1ECDi th\u1EE9 kh\u00E1c th\u00E0nh ''.
+ * Ép một phần tử reaction bất kỳ về chuỗi emoji.
+ * Chấp nhận chuỗi, hoặc object dạng { emoji } từ server / cache cũ; mọi thứ khác thành ''.
  */
 export function toEmojiString(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -58,9 +66,10 @@ const REACTION_LABELS: Record<string, string> = {
 };
 
 export const getReactionLabel = (emoji: unknown): string =>
-    REACTION_LABELS[normalizeEmoji(emoji)] ?? 'Cảm xúc khác';
+  REACTION_LABELS[normalizeEmoji(emoji)] ?? 'Cảm xúc khác';
 
-export const formatReactionCount = (count: number): string => (count > 99 ? '99+' : String(count));
+export const formatReactionCount = (count: number): string =>
+  count > 99 ? '99+' : String(count);
 
 export interface ReactionSummaryItem {
   emoji: string;

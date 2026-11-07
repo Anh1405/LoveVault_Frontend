@@ -14,6 +14,7 @@ import {
   Alert,
   ActivityIndicator,
   Image,
+  useWindowDimensions,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { useAuthStore } from '../../../store/useAuthStore';
@@ -45,6 +46,10 @@ export const SettingsModal: React.FC<{
   onExportBackup,
   onImportBackup,
 }) => {
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const isSmallScreen = screenWidth < 360;
+  const isLargeScreen = screenWidth >= 640;
+
   const [showImportBox, setShowImportBox] = useState(false);
   const [importJsonText, setImportJsonText] = useState('');
   const [importing, setImporting] = useState(false);
@@ -134,19 +139,19 @@ export const SettingsModal: React.FC<{
     void Haptics.selectionAsync().catch(() => {});
   };
 
-  // Đổi ảnh đại diện dùng helper pickImageAsBase64
   const handlePickMyAvatar = async () => {
     const base64Uri = await pickImageAsBase64(400);
 
     if (base64Uri) {
       await updateProfiles({ avatarUri: base64Uri });
-      
-      // Đồng bộ vĩnh viễn lên Server
-      api.patch('/api/v1/couples/shared-settings', {
-        membersById: {
-          [user?.id || 'me']: { avatarUri: base64Uri, updatedAt: new Date().toISOString() }
-        }
-      }).catch(() => null);
+
+      api
+        .patch('/api/v1/couples/shared-settings', {
+          membersById: {
+            [user?.id || 'me']: { avatarUri: base64Uri, updatedAt: new Date().toISOString() },
+          },
+        })
+        .catch(() => null);
 
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
@@ -217,18 +222,17 @@ export const SettingsModal: React.FC<{
     Alert.alert('Đã lưu cấu hình MoMo', 'Thông tin Quỹ chung MoMo của phòng đã được cập nhật.');
   };
 
-  // Đổi hình nền dùng helper pickImageAsBase64
   const pickWallpaper = async () => {
     const base64Uri = await pickImageAsBase64(1080);
 
     if (base64Uri) {
-      // 1. Cập nhật giao diện local
       await updateAppearance({ heroWallpaperUri: base64Uri });
 
-      // 2. Đồng bộ vĩnh viễn lên Server
-      await api.patch('/api/v1/couples/shared-settings', {
-        heroWallpaperUri: base64Uri,
-      }).catch(() => null);
+      await api
+        .patch('/api/v1/couples/shared-settings', {
+          heroWallpaperUri: base64Uri,
+        })
+        .catch(() => null);
     }
   };
 
@@ -258,13 +262,33 @@ export const SettingsModal: React.FC<{
     );
   };
 
+  const responsiveSheetStyle = {
+    width: '100%' as const,
+    maxWidth: isLargeScreen ? 600 : ('100%' as const),
+    maxHeight: Math.round(screenHeight * (isLargeScreen ? 0.88 : 0.92)),
+    alignSelf: 'center' as const,
+    borderBottomLeftRadius: isLargeScreen ? 24 : 0,
+    borderBottomRightRadius: isLargeScreen ? 24 : 0,
+    marginBottom: isLargeScreen ? 20 : 0,
+  };
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        style={[styles.backdrop, { backgroundColor: colors.backdrop }]}
+        style={[
+          styles.backdrop,
+          { backgroundColor: colors.backdrop },
+          isLargeScreen && { justifyContent: 'center', padding: 16 },
+        ]}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={[styles.sheetCard, { backgroundColor: colors.surface }]}>
+        <View
+          style={[
+            styles.sheetCard,
+            { backgroundColor: colors.surface },
+            responsiveSheetStyle,
+          ]}
+        >
           <View style={styles.sheetDragHandle} />
           <Text style={[styles.sheetTitle, { color: colors.textPrimary }]}>
             Tùy chỉnh phòng chung & Tài khoản
@@ -280,8 +304,13 @@ export const SettingsModal: React.FC<{
           >
             {/* MỤC 1: THÔNG TIN USER & BIỆT DANH CHUNG */}
             <View style={[styles.settingsGroupBox, { borderColor: colors.borderSubtle }]}>
-              <View style={styles.sectionHeaderWrap}>
-                <Text style={[styles.subHeading, { color: colors.primary, marginBottom: 0, flexShrink: 1 }]}>
+              <View style={[styles.sectionHeaderWrap, { flexWrap: 'wrap', gap: 8 }]}>
+                <Text
+                  style={[
+                    styles.subHeading,
+                    { color: colors.primary, marginBottom: 0, flexShrink: 1 },
+                  ]}
+                >
                   Hồ sơ của bạn & Biệt danh chung
                 </Text>
                 {onOpenFullProfile && (
@@ -292,7 +321,13 @@ export const SettingsModal: React.FC<{
                       onOpenFullProfile?.();
                     }}
                   >
-                    <Text style={{ fontSize: 12, fontWeight: '700', color: colors.onPrimaryContainer }}>
+                    <Text
+                      style={{
+                        fontSize: 12,
+                        fontWeight: '700',
+                        color: colors.onPrimaryContainer,
+                      }}
+                    >
                       Phiếu hẹn & Ghi chú ▸
                     </Text>
                   </Pressable>
@@ -336,14 +371,27 @@ export const SettingsModal: React.FC<{
                 </Pressable>
 
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 16, fontWeight: '700', color: colors.textPrimary }} numberOfLines={1}>
+                  <Text
+                    style={{ fontSize: 16, fontWeight: '700', color: colors.textPrimary }}
+                    numberOfLines={1}
+                  >
                     {user?.fullName || myProfile.nickname}
                   </Text>
-                  <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 3 }} numberOfLines={1}>
+                  <Text
+                    style={{ fontSize: 12, color: colors.textSecondary, marginTop: 3 }}
+                    numberOfLines={1}
+                  >
                     Email: {user?.email || 'Đã xác thực'}
                   </Text>
                   <Pressable onPress={handlePickMyAvatar} hitSlop={6}>
-                    <Text style={{ fontSize: 12, fontWeight: '700', color: colors.primary, marginTop: 6 }}>
+                    <Text
+                      style={{
+                        fontSize: 12,
+                        fontWeight: '700',
+                        color: colors.primary,
+                        marginTop: 6,
+                      }}
+                    >
                       Chạm để đổi ảnh đại diện
                     </Text>
                   </Pressable>
@@ -354,20 +402,34 @@ export const SettingsModal: React.FC<{
                 Họ và tên tài khoản
               </Text>
               <TextInput
-                style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                style={[
+                  styles.inputBox,
+                  { borderColor: colors.outline, color: colors.textPrimary },
+                ]}
                 value={editFullName}
                 onChangeText={setEditFullName}
                 placeholder="Nhập họ tên của bạn"
                 placeholderTextColor={colors.textSecondary}
               />
 
-              <View style={styles.twoColFormRow}>
+              <View
+                style={[
+                  styles.twoColFormRow,
+                  isSmallScreen && { flexDirection: 'column', gap: 0 },
+                ]}
+              >
                 <View style={styles.colItem}>
-                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                  <Text
+                    style={[styles.fieldLabel, { color: colors.textSecondary }]}
+                    numberOfLines={1}
+                  >
                     Biệt danh của bạn
                   </Text>
                   <TextInput
-                    style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                    style={[
+                      styles.inputBox,
+                      { borderColor: colors.outline, color: colors.textPrimary },
+                    ]}
                     value={editMyNickname}
                     onChangeText={setEditMyNickname}
                     placeholder="VD: Anh / Em"
@@ -376,11 +438,17 @@ export const SettingsModal: React.FC<{
                 </View>
 
                 <View style={styles.colItem}>
-                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                  <Text
+                    style={[styles.fieldLabel, { color: colors.textSecondary }]}
+                    numberOfLines={1}
+                  >
                     Biệt danh người thương
                   </Text>
                   <TextInput
-                    style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                    style={[
+                      styles.inputBox,
+                      { borderColor: colors.outline, color: colors.textPrimary },
+                    ]}
                     value={editPartnerNickname}
                     onChangeText={setEditPartnerNickname}
                     placeholder="VD: Bé Yêu"
@@ -393,14 +461,22 @@ export const SettingsModal: React.FC<{
                 Dòng trạng thái
               </Text>
               <TextInput
-                style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                style={[
+                  styles.inputBox,
+                  { borderColor: colors.outline, color: colors.textPrimary },
+                ]}
                 value={editStatusText}
                 onChangeText={setEditStatusText}
                 placeholder="VD: Đang nhớ đằng ấy..."
                 placeholderTextColor={colors.textSecondary}
               />
 
-              <View style={styles.twoColRow}>
+              <View
+                style={[
+                  styles.twoColRow,
+                  isSmallScreen && { flexDirection: 'column' },
+                ]}
+              >
                 <Pressable
                   style={[styles.primaryBtn, { backgroundColor: colors.primary, flex: 1.2 }]}
                   onPress={handleSaveUserAccountInfo}
@@ -409,28 +485,46 @@ export const SettingsModal: React.FC<{
                   {savingUserInfo ? (
                     <ActivityIndicator size="small" color="#FFF" />
                   ) : (
-                    <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 13 }} numberOfLines={1}>
+                    <Text
+                      style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 13 }}
+                      numberOfLines={1}
+                    >
                       Lưu biệt danh chung
                     </Text>
                   )}
                 </Pressable>
 
                 <Pressable
-                  style={[styles.secondaryBtn, { backgroundColor: colors.surfaceVariant, flex: 1 }]}
+                  style={[
+                    styles.secondaryBtn,
+                    { backgroundColor: colors.surfaceVariant, flex: 1 },
+                  ]}
                   onPress={() => setShowPasswordForm((prev) => !prev)}
                 >
-                  <Text style={{ color: colors.textPrimary, fontWeight: '600', fontSize: 13 }} numberOfLines={1}>
+                  <Text
+                    style={{ color: colors.textPrimary, fontWeight: '600', fontSize: 13 }}
+                    numberOfLines={1}
+                  >
                     {showPasswordForm ? 'Ẩn mật khẩu' : 'Đổi mật khẩu'}
                   </Text>
                 </Pressable>
               </View>
 
               {showPasswordForm && (
-                <View style={[styles.funBox, { backgroundColor: colors.surfaceVariant, marginTop: 12, marginBottom: 0 }]}>
+                <View
+                  style={[
+                    styles.funBox,
+                    { backgroundColor: colors.surfaceVariant, marginTop: 12, marginBottom: 0 },
+                  ]}
+                >
                   <TextInput
                     style={[
                       styles.inputBox,
-                      { borderColor: colors.outline, color: colors.textPrimary, backgroundColor: colors.surface },
+                      {
+                        borderColor: colors.outline,
+                        color: colors.textPrimary,
+                        backgroundColor: colors.surface,
+                      },
                     ]}
                     placeholder="Mật khẩu hiện tại"
                     placeholderTextColor={colors.textSecondary}
@@ -441,7 +535,11 @@ export const SettingsModal: React.FC<{
                   <TextInput
                     style={[
                       styles.inputBox,
-                      { borderColor: colors.outline, color: colors.textPrimary, backgroundColor: colors.surface },
+                      {
+                        borderColor: colors.outline,
+                        color: colors.textPrimary,
+                        backgroundColor: colors.surface,
+                      },
                     ]}
                     placeholder="Mật khẩu mới (tối thiểu 6 ký tự)"
                     placeholderTextColor={colors.textSecondary}
@@ -452,7 +550,13 @@ export const SettingsModal: React.FC<{
                   <Pressable
                     style={[
                       styles.primaryBtn,
-                      { backgroundColor: colors.textPrimary, flexGrow: 0, flexShrink: 0, flexBasis: 'auto', alignSelf: 'stretch' },
+                      {
+                        backgroundColor: colors.textPrimary,
+                        flexGrow: 0,
+                        flexShrink: 0,
+                        flexBasis: 'auto',
+                        alignSelf: 'stretch',
+                      },
                     ]}
                     onPress={handleChangePassword}
                   >
@@ -471,11 +575,23 @@ export const SettingsModal: React.FC<{
                   <Text style={[styles.subHeading, { color: '#A50064', marginBottom: 4 }]}>
                     Quỹ chung MoMo cặp đôi
                   </Text>
-                  <Text style={[styles.helperSubText, { color: colors.textSecondary, marginBottom: 0 }]}>
+                  <Text
+                    style={[
+                      styles.helperSubText,
+                      { color: colors.textSecondary, marginBottom: 0 },
+                    ]}
+                  >
                     Bật để tích hợp nạp/rút và tự tính % theo số tiền MoMo trong mục Mục tiêu.
                   </Text>
                 </View>
-                <View style={{ flexShrink: 0, minWidth: 52, alignItems: 'flex-end', justifyContent: 'center' }}>
+                <View
+                  style={{
+                    flexShrink: 0,
+                    minWidth: 52,
+                    alignItems: 'flex-end',
+                    justifyContent: 'center',
+                  }}
+                >
                   <Switch
                     value={momoEnabled}
                     onValueChange={(val) => void handleToggleMomoEnabled(val)}
@@ -487,13 +603,24 @@ export const SettingsModal: React.FC<{
 
               {momoEnabled ? (
                 <View style={{ marginTop: 12 }}>
-                  <View style={styles.twoColFormRow}>
+                  <View
+                    style={[
+                      styles.twoColFormRow,
+                      isSmallScreen && { flexDirection: 'column', gap: 0 },
+                    ]}
+                  >
                     <View style={styles.colItem}>
-                      <Text style={[styles.fieldLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                      <Text
+                        style={[styles.fieldLabel, { color: colors.textSecondary }]}
+                        numberOfLines={1}
+                      >
                         SĐT MoMo giữ quỹ
                       </Text>
                       <TextInput
-                        style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                        style={[
+                          styles.inputBox,
+                          { borderColor: colors.outline, color: colors.textPrimary },
+                        ]}
                         value={momoPhone}
                         onChangeText={setMomoPhone}
                         keyboardType="phone-pad"
@@ -502,11 +629,17 @@ export const SettingsModal: React.FC<{
                       />
                     </View>
                     <View style={styles.colItem}>
-                      <Text style={[styles.fieldLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                      <Text
+                        style={[styles.fieldLabel, { color: colors.textSecondary }]}
+                        numberOfLines={1}
+                      >
                         Tên hiển thị Quỹ
                       </Text>
                       <TextInput
-                        style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                        style={[
+                          styles.inputBox,
+                          { borderColor: colors.outline, color: colors.textPrimary },
+                        ]}
                         value={momoHolder}
                         onChangeText={setMomoHolder}
                         placeholder="Quỹ hai đứa"
@@ -519,7 +652,10 @@ export const SettingsModal: React.FC<{
                     Link Quỹ nhóm MoMo / Link nhận tiền (Tùy chọn)
                   </Text>
                   <TextInput
-                    style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                    style={[
+                      styles.inputBox,
+                      { borderColor: colors.outline, color: colors.textPrimary },
+                    ]}
                     value={momoLink}
                     onChangeText={setMomoLink}
                     autoCapitalize="none"
@@ -530,7 +666,13 @@ export const SettingsModal: React.FC<{
                   <Pressable
                     style={[
                       styles.primaryBtn,
-                      { backgroundColor: '#A50064', flexGrow: 0, flexShrink: 0, flexBasis: 'auto', alignSelf: 'stretch' },
+                      {
+                        backgroundColor: '#A50064',
+                        flexGrow: 0,
+                        flexShrink: 0,
+                        flexBasis: 'auto',
+                        alignSelf: 'stretch',
+                      },
                     ]}
                     onPress={handleSaveMomoConfig}
                   >
@@ -559,7 +701,7 @@ export const SettingsModal: React.FC<{
                 Biểu tượng tương tác chung
               </Text>
 
-              <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12 }}>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
                 {HEART_SKINS.map((skin) => {
                   const active = socialPrefs.heartBoxSkin === skin;
                   return (
@@ -569,6 +711,7 @@ export const SettingsModal: React.FC<{
                         styles.heartSkinSettingBtn,
                         {
                           flex: 1,
+                          minWidth: 44,
                           width: undefined,
                           borderColor: colors.outline,
                           backgroundColor: colors.surfaceVariant,
@@ -617,7 +760,9 @@ export const SettingsModal: React.FC<{
               </View>
 
               <View style={styles.switchRow}>
-                <Text style={{ color: colors.textPrimary, fontSize: 13, flex: 1, paddingRight: 8 }}>
+                <Text
+                  style={{ color: colors.textPrimary, fontSize: 13, flex: 1, paddingRight: 8 }}
+                >
                   Hiệu ứng chuyển động khi chạm
                 </Text>
                 <Switch
@@ -627,7 +772,9 @@ export const SettingsModal: React.FC<{
               </View>
 
               <View style={styles.switchRow}>
-                <Text style={{ color: colors.textPrimary, fontSize: 13, flex: 1, paddingRight: 8 }}>
+                <Text
+                  style={{ color: colors.textPrimary, fontSize: 13, flex: 1, paddingRight: 8 }}
+                >
                   Rung phản hồi xúc giác
                 </Text>
                 <Switch
@@ -644,7 +791,15 @@ export const SettingsModal: React.FC<{
               </Text>
 
               <View style={styles.switchRow}>
-                <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '600', flex: 1, paddingRight: 8 }}>
+                <Text
+                  style={{
+                    color: colors.textPrimary,
+                    fontSize: 13,
+                    fontWeight: '600',
+                    flex: 1,
+                    paddingRight: 8,
+                  }}
+                >
                   Cho phép thông báo
                 </Text>
                 <Switch
@@ -656,17 +811,33 @@ export const SettingsModal: React.FC<{
               {notificationPrefs.masterEnabled && (
                 <>
                   <View style={styles.switchRow}>
-                    <Text style={{ color: colors.textPrimary, fontSize: 13, flex: 1, paddingRight: 8 }}>
+                    <Text
+                      style={{
+                        color: colors.textPrimary,
+                        fontSize: 13,
+                        flex: 1,
+                        paddingRight: 8,
+                      }}
+                    >
                       Làm mới lời nhắc tự động mỗi ngày
                     </Text>
                     <Switch
                       value={notificationPrefs.enableAiFunnyTone}
-                      onValueChange={(val) => updateNotificationPrefs({ enableAiFunnyTone: val })}
+                      onValueChange={(val) =>
+                        updateNotificationPrefs({ enableAiFunnyTone: val })
+                      }
                     />
                   </View>
 
                   <View style={styles.switchRow}>
-                    <Text style={{ color: colors.textPrimary, fontSize: 13, flex: 1, paddingRight: 8 }}>
+                    <Text
+                      style={{
+                        color: colors.textPrimary,
+                        fontSize: 13,
+                        flex: 1,
+                        paddingRight: 8,
+                      }}
+                    >
                       Nhắc ngày kỷ niệm & sinh nhật
                     </Text>
                     <Switch
@@ -681,7 +852,14 @@ export const SettingsModal: React.FC<{
                   </View>
 
                   <View style={styles.switchRow}>
-                    <Text style={{ color: colors.textPrimary, fontSize: 13, flex: 1, paddingRight: 8 }}>
+                    <Text
+                      style={{
+                        color: colors.textPrimary,
+                        fontSize: 13,
+                        flex: 1,
+                        paddingRight: 8,
+                      }}
+                    >
                       Ẩn nội dung chi tiết trên màn hình khóa
                     </Text>
                     <Switch
@@ -725,10 +903,10 @@ export const SettingsModal: React.FC<{
                       {preset === 'ROSE'
                         ? 'Hồng'
                         : preset === 'VIOLET'
-                          ? 'Tím'
-                          : preset === 'PASTEL'
-                            ? 'Pastel'
-                            : 'Đêm'}
+                        ? 'Tím'
+                        : preset === 'PASTEL'
+                        ? 'Pastel'
+                        : 'Đêm'}
                     </Text>
                   </Pressable>
                 ))}
@@ -752,9 +930,18 @@ export const SettingsModal: React.FC<{
                 ))}
               </View>
 
-              <View style={[styles.twoColRow, { marginVertical: 6 }]}>
+              <View
+                style={[
+                  styles.twoColRow,
+                  { marginVertical: 6 },
+                  isSmallScreen && { flexDirection: 'column' },
+                ]}
+              >
                 <Pressable
-                  style={[styles.secondaryBtn, { backgroundColor: colors.surfaceVariant, flex: 1 }]}
+                  style={[
+                    styles.secondaryBtn,
+                    { backgroundColor: colors.surfaceVariant, flex: 1 },
+                  ]}
                   onPress={pickWallpaper}
                 >
                   <Text style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '600' }}>
@@ -762,7 +949,10 @@ export const SettingsModal: React.FC<{
                   </Text>
                 </Pressable>
                 <Pressable
-                  style={[styles.secondaryBtn, { backgroundColor: colors.surfaceVariant, flex: 1 }]}
+                  style={[
+                    styles.secondaryBtn,
+                    { backgroundColor: colors.surfaceVariant, flex: 1 },
+                  ]}
                   onPress={() => updateAppearance({ heroWallpaperUri: null })}
                 >
                   <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '600' }}>
@@ -772,7 +962,9 @@ export const SettingsModal: React.FC<{
               </View>
 
               <View style={styles.switchRow}>
-                <Text style={{ color: colors.textPrimary, fontSize: 13, flex: 1, paddingRight: 8 }}>
+                <Text
+                  style={{ color: colors.textPrimary, fontSize: 13, flex: 1, paddingRight: 8 }}
+                >
                   Tính ngày bắt đầu là ngày thứ 1
                 </Text>
                 <Switch
@@ -782,7 +974,9 @@ export const SettingsModal: React.FC<{
               </View>
 
               <View style={styles.switchRow}>
-                <Text style={{ color: colors.textPrimary, fontSize: 13, flex: 1, paddingRight: 8 }}>
+                <Text
+                  style={{ color: colors.textPrimary, fontSize: 13, flex: 1, paddingRight: 8 }}
+                >
                   Hiển thị theo Năm, Tháng, Ngày
                 </Text>
                 <Switch
@@ -795,7 +989,12 @@ export const SettingsModal: React.FC<{
             </View>
 
             {/* NHÓM BẢO MẬT & ĐỒNG BỘ DỮ LIỆU PHÒNG */}
-            <View style={[styles.settingsGroupBox, { borderColor: colors.borderSubtle, borderBottomWidth: 0, marginBottom: 0 }]}>
+            <View
+              style={[
+                styles.settingsGroupBox,
+                { borderColor: colors.borderSubtle, borderBottomWidth: 0, marginBottom: 0 },
+              ]}
+            >
               <Text style={[styles.subHeading, { color: colors.textPrimary }]}>
                 Bảo mật & Đồng bộ phòng chung
               </Text>
@@ -851,9 +1050,18 @@ export const SettingsModal: React.FC<{
                 </Pressable>
               </View>
 
-              <View style={[styles.twoColRow, { marginBottom: 10 }]}>
+              <View
+                style={[
+                  styles.twoColRow,
+                  { marginBottom: 10 },
+                  isSmallScreen && { flexDirection: 'column' },
+                ]}
+              >
                 <Pressable
-                  style={[styles.secondaryBtn, { backgroundColor: colors.surfaceVariant, flex: 1 }]}
+                  style={[
+                    styles.secondaryBtn,
+                    { backgroundColor: colors.surfaceVariant, flex: 1 },
+                  ]}
                   onPress={handleBackup}
                 >
                   <Text style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '600' }}>
@@ -862,18 +1070,36 @@ export const SettingsModal: React.FC<{
                 </Pressable>
 
                 <Pressable
-                  style={[styles.secondaryBtn, { backgroundColor: colors.primaryContainer, flex: 1 }]}
+                  style={[
+                    styles.secondaryBtn,
+                    { backgroundColor: colors.primaryContainer, flex: 1 },
+                  ]}
                   onPress={() => setShowImportBox((prev) => !prev)}
                 >
-                  <Text style={{ color: colors.onPrimaryContainer, fontSize: 12, fontWeight: '700' }}>
+                  <Text
+                    style={{ color: colors.onPrimaryContainer, fontSize: 12, fontWeight: '700' }}
+                  >
                     Nhận dữ liệu phòng
                   </Text>
                 </Pressable>
               </View>
 
               {showImportBox && (
-                <View style={[styles.funBox, { backgroundColor: colors.surfaceVariant, marginBottom: 12 }]}>
-                  <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textPrimary, marginBottom: 8, lineHeight: 18 }}>
+                <View
+                  style={[
+                    styles.funBox,
+                    { backgroundColor: colors.surfaceVariant, marginBottom: 12 },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      fontWeight: '600',
+                      color: colors.textPrimary,
+                      marginBottom: 8,
+                      lineHeight: 18,
+                    }}
+                  >
                     Dán nội dung JSON từ máy người thương gửi sang để đồng bộ tức thì mọi thứ trong phòng:
                   </Text>
                   <TextInput
@@ -895,7 +1121,13 @@ export const SettingsModal: React.FC<{
                   <Pressable
                     style={[
                       styles.primaryBtn,
-                      { backgroundColor: colors.primary, flexGrow: 0, flexShrink: 0, flexBasis: 'auto', alignSelf: 'stretch' },
+                      {
+                        backgroundColor: colors.primary,
+                        flexGrow: 0,
+                        flexShrink: 0,
+                        flexBasis: 'auto',
+                        alignSelf: 'stretch',
+                      },
                     ]}
                     onPress={handleConfirmImport}
                     disabled={importing}
@@ -944,7 +1176,9 @@ export const SettingsModal: React.FC<{
                 onLogout();
               }}
             >
-              <Text style={{ color: colors.error, fontWeight: '600', fontSize: 13 }}>Đăng xuất</Text>
+              <Text style={{ color: colors.error, fontWeight: '600', fontSize: 13 }}>
+                Đăng xuất
+              </Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"

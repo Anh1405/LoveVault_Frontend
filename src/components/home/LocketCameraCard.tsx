@@ -43,10 +43,6 @@ const FLASH_LABEL: Record<FlashChoice, string> = {
 
 const GLASS = 'rgba(24, 14, 18, 0.44)';
 const CAPTION_MAX = 80;
-const SIDE_BTN = 54;
-const HALO = 94;
-const RING = 82;
-const CORE = 66;
 
 export interface LocketStampItem {
   id: string;
@@ -102,6 +98,7 @@ interface SideButtonProps {
   onPress: () => void;
   label: string;
   bg: string;
+  size: number;
   disabled?: boolean;
   children: React.ReactNode;
 }
@@ -110,6 +107,7 @@ const SideButton = memo(function SideButton({
   onPress,
   label,
   bg,
+  size,
   disabled = false,
   children,
 }: SideButtonProps) {
@@ -122,7 +120,12 @@ const SideButton = memo(function SideButton({
       onPress={onPress}
       style={({ pressed }) => [
         styles.sideBtn,
-        { backgroundColor: bg },
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: bg,
+        },
         pressed && styles.pressed,
         disabled && styles.disabled,
       ]}
@@ -137,6 +140,7 @@ interface FlipButtonProps {
   onPress: () => void;
   bg: string;
   color: string;
+  size: number;
   disabled: boolean;
 }
 
@@ -145,6 +149,7 @@ const FlipButton = memo(function FlipButton({
   onPress,
   bg,
   color,
+  size,
   disabled,
 }: FlipButtonProps) {
   const turns = useRef(new Animated.Value(facing === 'back' ? 1 : 0)).current;
@@ -167,10 +172,11 @@ const FlipButton = memo(function FlipButton({
       onPress={onPress}
       disabled={disabled}
       bg={bg}
+      size={size}
       label={facing === 'front' ? 'Đổi sang camera sau' : 'Đổi sang camera trước'}
     >
       <Animated.View style={{ transform: [{ rotate }] }}>
-        <FlipIcon size={28} color={color} />
+        <FlipIcon size={Math.round(size * 0.52)} color={color} />
       </Animated.View>
     </SideButton>
   );
@@ -183,6 +189,7 @@ interface ShutterButtonProps {
   color: string;
   halo: string;
   label: string;
+  compact?: boolean;
   onPress: () => void;
 }
 
@@ -193,9 +200,15 @@ const ShutterButton = memo(function ShutterButton({
   color,
   halo,
   label,
+  compact = false,
   onPress,
 }: ShutterButtonProps) {
   const scale = useRef(new Animated.Value(1)).current;
+
+  const haloSize = compact ? 78 : 94;
+  const ringSize = compact ? 68 : 82;
+  const coreSize = compact ? 54 : 66;
+  const iconSize = compact ? 24 : 29;
 
   const animateTo = useCallback(
     (to: number) => {
@@ -226,18 +239,44 @@ const ShutterButton = memo(function ShutterButton({
       <Animated.View
         style={[
           styles.halo,
-          { backgroundColor: halo, opacity: disabled && !busy ? 0.55 : 1 },
+          {
+            width: haloSize,
+            height: haloSize,
+            borderRadius: haloSize / 2,
+            backgroundColor: halo,
+            opacity: disabled && !busy ? 0.55 : 1,
+          },
           { transform: [{ scale }] },
         ]}
       >
-        <View style={[styles.ring, { borderColor: color }]}>
-          <View style={[styles.core, { backgroundColor: color }]}>
+        <View
+          style={[
+            styles.ring,
+            {
+              width: ringSize,
+              height: ringSize,
+              borderRadius: ringSize / 2,
+              borderColor: color,
+            },
+          ]}
+        >
+          <View
+            style={[
+              styles.core,
+              {
+                width: coreSize,
+                height: coreSize,
+                borderRadius: coreSize / 2,
+                backgroundColor: color,
+              },
+            ]}
+          >
             {busy ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : variant === 'send' ? (
-              <SendIcon size={28} color="#FFFFFF" />
+              <SendIcon size={iconSize} color="#FFFFFF" />
             ) : (
-              <HeartIcon size={30} color="#FFFFFF" />
+              <HeartIcon size={iconSize} color="#FFFFFF" />
             )}
           </View>
         </View>
@@ -246,7 +285,6 @@ const ShutterButton = memo(function ShutterButton({
   );
 });
 
-// Dừng triệt để mọi Track trong một MediaStream để giải phóng phần cứng Camera HAL trên Android
 function stopMediaStream(stream: MediaStream | null | undefined) {
   if (!stream) return;
   try {
@@ -262,7 +300,6 @@ function stopMediaStream(stream: MediaStream | null | undefined) {
   }
 }
 
-// Kiểm tra xem một track có phải là ống kính Macro/Depth độ phân giải thấp hoặc khóa tiêu cự không
 function isLikelyMacroOrDepthTrack(track: MediaStreamTrack): boolean {
   try {
     const caps = (track as any).getCapabilities?.() || {};
@@ -282,7 +319,6 @@ function isLikelyMacroOrDepthTrack(track: MediaStreamTrack): boolean {
   return false;
 }
 
-// Ép Track về tỷ lệ 4:3 (1280x960) để không bao giờ bị trình duyệt crop 16:9 (1920x1080)
 async function enforceFullSensor4By3(track: MediaStreamTrack) {
   try {
     const settings = track.getSettings?.() || {};
@@ -298,11 +334,10 @@ async function enforceFullSensor4By3(track: MediaStreamTrack) {
       } as MediaTrackConstraints);
     }
   } catch {
-    // Một số trình duyệt không cho đổi aspectRatio sau khi mở, bỏ qua an toàn
+    // Bỏ qua an toàn
   }
 }
 
-// Mở stream với cấu hình 4:3 chuẩn toàn cảm biến
 async function openSensorStream(
   constraintTarget: { deviceId?: string; facingMode?: 'user' | 'environment' },
 ): Promise<MediaStream | null> {
@@ -371,10 +406,20 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
 }) => {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
-  const sideMargin = 6;
-  const viewportSize = Math.min(440, Math.max(300, Math.round(screenWidth - sideMargin * 2)));
+  const isCompactVertical = screenHeight < 700 || screenWidth > screenHeight;
+  const isWideScreen = screenWidth >= 680;
+  const sideBtnSize = isCompactVertical ? 46 : 54;
+
+  // Khung ngắm vuông tự co giãn vừa vặn theo cả chiều ngang lẫn chiều dọc
+  const sideMargin = isWideScreen ? 16 : 8;
+  const maxByWidth = Math.min(440, Math.max(240, Math.round(screenWidth - sideMargin * 2)));
+  const maxByHeight = Math.max(230, Math.round(screenHeight - reservedHeight - (isCompactVertical ? 210 : 250)));
+  const viewportSize = Math.min(maxByWidth, maxByHeight);
+  const viewportRadius = Math.max(28, Math.min(46, Math.round(viewportSize * 0.11)));
   const nativeSensorHeight = Math.round((viewportSize * 4) / 3);
-  const stageMinHeight = Math.max(560, screenHeight - reservedHeight);
+  const stageMinHeight = isCompactVertical
+    ? undefined
+    : Math.max(500, screenHeight - reservedHeight);
 
   const { myProfile, partnerProfile, updateProfiles } = useSettingsStore();
 
@@ -487,7 +532,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     }
   }, [shouldMountCamera]);
 
-  // Luôn mở camera ở góc rộng tối đa trên Web (tương tự Locket gốc)
   const syncWebCameraStream = useCallback(async (targetFacing: CameraType) => {
     if (Platform.OS !== 'web' || typeof document === 'undefined' || !navigator?.mediaDevices) {
       return;
@@ -496,7 +540,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
     const requestId = ++webRequestIdRef.current;
 
     try {
-      // Giải phóng hoàn toàn luồng camera cũ trước khi mở ống kính mới
       if (activeWebStreamRef.current) {
         stopMediaStream(activeWebStreamRef.current);
         activeWebStreamRef.current = null;
@@ -505,7 +548,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         webVideoRef.current.srcObject = null;
       }
 
-      // 1. Mở Camera Trước ở góc rộng nhất
       if (targetFacing === 'front') {
         const frontStream = await openSensorStream({ facingMode: 'user' });
         if (requestId !== webRequestIdRef.current) {
@@ -535,7 +577,6 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         return;
       }
 
-      // 2. Mở Camera Sau ở góc rộng nhất
       let devices: MediaDeviceInfo[] = [];
       if (navigator.mediaDevices.enumerateDevices) {
         const all = await navigator.mediaDevices.enumerateDevices();
@@ -664,7 +705,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
           .catch(() => null);
       }
     } catch {
-      // Bỏ qua nếu thiết bị không hỗ trợ bật đèn flash từ trình duyệt
+      // Bỏ qua
     }
   }, [flash, facing, isCameraReady]);
 
@@ -815,7 +856,17 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
   }, []);
 
   return (
-    <View style={[styles.root, { backgroundColor: colors.surface, minHeight: stageMinHeight }]}>
+    <View
+      style={[
+        styles.root,
+        {
+          backgroundColor: colors.surface,
+          minHeight: stageMinHeight,
+          marginHorizontal: isWideScreen ? 0 : -METRICS.paddingHorizontal,
+          borderRadius: isWideScreen ? METRICS.radiusLg : 0,
+        },
+      ]}
+    >
       <View style={styles.coupleStrip}>
         <View style={styles.personBox}>
           <View style={[styles.avatar, { backgroundColor: colors.primaryContainer }]}>
@@ -875,6 +926,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
           {
             width: viewportSize,
             height: viewportSize,
+            borderRadius: viewportRadius,
             backgroundColor: '#121214',
             shadowColor: colors.primary,
           },
@@ -985,7 +1037,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
             <View
               style={[
                 styles.stampBadge,
-                { backgroundColor: colors.primary, maxWidth: viewportSize - 16 * 2 - 58 },
+                { backgroundColor: colors.primary, maxWidth: Math.max(120, viewportSize - 90) },
               ]}
               pointerEvents="none"
             >
@@ -1016,24 +1068,26 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
         )}
       </View>
 
-      <View style={styles.shutterSection}>
-        <View style={styles.shutterRow}>
+      <View style={[styles.shutterSection, isCompactVertical && { paddingVertical: 8 }]}>
+        <View style={[styles.shutterRow, { maxWidth: Math.max(320, viewportSize) }]}>
           {previewUri ? (
             <SideButton
               onPress={handleRetake}
               disabled={isSending}
               bg={colors.surfaceVariant}
+              size={sideBtnSize}
               label="Chụp lại"
             >
-              <CloseIcon size={24} color={colors.textPrimary} />
+              <CloseIcon size={Math.round(sideBtnSize * 0.45)} color={colors.textPrimary} />
             </SideButton>
           ) : (
             <SideButton
               onPress={() => void handlePickGallery()}
               bg={colors.surfaceVariant}
+              size={sideBtnSize}
               label="Chọn ảnh từ thư viện"
             >
-              <GalleryIcon size={28} color={colors.textPrimary} />
+              <GalleryIcon size={Math.round(sideBtnSize * 0.5)} color={colors.textPrimary} />
             </SideButton>
           )}
 
@@ -1044,6 +1098,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
               disabled={isSending}
               color={colors.primary}
               halo={colors.primaryContainer}
+              compact={isCompactVertical}
               label="Gửi Locket"
               onPress={() => void handleConfirmSendPreview()}
             />
@@ -1054,13 +1109,14 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
               disabled={!granted || isCapturing || !isCameraReady}
               color={colors.primary}
               halo={colors.primaryContainer}
+              compact={isCompactVertical}
               label={isCameraReady ? 'Chụp ảnh' : 'Đang mở ống kính'}
               onPress={() => void handleTakePicture()}
             />
           )}
 
           {previewUri ? (
-            <View style={styles.sideSpacer} />
+            <View style={{ width: sideBtnSize, height: sideBtnSize }} />
           ) : (
             <FlipButton
               facing={facing}
@@ -1068,6 +1124,7 @@ const LocketCameraCardInner: React.FC<LocketCameraCardProps> = ({
               disabled={!granted}
               bg={colors.surfaceVariant}
               color={colors.textPrimary}
+              size={sideBtnSize}
             />
           )}
         </View>
@@ -1155,10 +1212,10 @@ export const LocketCameraCard = memo(LocketCameraCardInner);
 
 const styles = StyleSheet.create({
   root: {
-    marginHorizontal: -METRICS.paddingHorizontal,
     paddingHorizontal: METRICS.paddingHorizontal,
     paddingTop: 8,
     paddingBottom: 8,
+    marginBottom: 8,
   },
   pressed: { opacity: 0.7 },
   disabled: { opacity: 0.4 },
@@ -1196,7 +1253,6 @@ const styles = StyleSheet.create({
 
   viewport: {
     alignSelf: 'center',
-    borderRadius: 46,
     overflow: 'hidden',
     position: 'relative',
     shadowOpacity: 0.14,
@@ -1219,7 +1275,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 24,
   },
-  fallbackTitle: { fontSize: 15, fontWeight: '700', marginBottom: 6 },
+  fallbackTitle: { fontSize: 15, fontWeight: '700', marginBottom: 6, textAlign: 'center' },
   fallbackDesc: { fontSize: 13, textAlign: 'center', marginBottom: 14, lineHeight: 18 },
   fallbackBtn: {
     minHeight: METRICS.minTouchTarget,
@@ -1232,9 +1288,9 @@ const styles = StyleSheet.create({
 
   overlayTop: {
     position: 'absolute',
-    top: 16,
-    left: 16,
-    right: 16,
+    top: 14,
+    left: 14,
+    right: 14,
     zIndex: 10,
     elevation: 6,
     flexDirection: 'row',
@@ -1258,15 +1314,15 @@ const styles = StyleSheet.create({
 
   overlayBottom: {
     position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 16,
+    left: 14,
+    right: 14,
+    bottom: 14,
     zIndex: 10,
     elevation: 6,
     alignItems: 'center',
   },
   captionPill: {
-    maxWidth: '88%',
+    maxWidth: '90%',
     minHeight: 40,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1278,7 +1334,7 @@ const styles = StyleSheet.create({
   },
   captionInlineInput: {
     flexShrink: 1,
-    minWidth: 110,
+    minWidth: 100,
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '600',
@@ -1295,38 +1351,26 @@ const styles = StyleSheet.create({
   },
   shutterRow: {
     width: '100%',
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
     paddingHorizontal: 12,
   },
   sideBtn: {
-    width: SIDE_BTN,
-    height: SIDE_BTN,
-    borderRadius: SIDE_BTN / 2,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  sideSpacer: { width: SIDE_BTN, height: SIDE_BTN },
   halo: {
-    width: HALO,
-    height: HALO,
-    borderRadius: HALO / 2,
     justifyContent: 'center',
     alignItems: 'center',
   },
   ring: {
-    width: RING,
-    height: RING,
-    borderRadius: RING / 2,
     borderWidth: 3.5,
     justifyContent: 'center',
     alignItems: 'center',
   },
   core: {
-    width: CORE,
-    height: CORE,
-    borderRadius: CORE / 2,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1346,6 +1390,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
     marginTop: 6,
   },
   footerItem: {

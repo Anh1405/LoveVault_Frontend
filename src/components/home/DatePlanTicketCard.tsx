@@ -1,6 +1,6 @@
 // src/components/home/DatePlanTicketCard.tsx
 import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Pressable, useWindowDimensions } from 'react-native';
 import { ThemeColors } from '../../constants/theme';
 import {
   ImportantEvent,
@@ -22,6 +22,9 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
   onEdit,
   onDelete,
 }) => {
+  const { width: screenWidth } = useWindowDimensions();
+  const isSmallScreen = screenWidth < 360;
+
   const plan = item.datePlan;
   const daysLeft = computeDaysUntilNextOccurrence(item.eventDate, false);
 
@@ -36,6 +39,7 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
     <Pressable
       style={[
         styles.ticketCard,
+        isSmallScreen && { padding: 12 },
         { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
       ]}
       onPress={() => onEdit(item)}
@@ -43,7 +47,7 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
       {/* HEADER TICKET */}
       <View style={styles.ticketHeader}>
         <View style={{ flex: 1, paddingRight: 8 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <View style={styles.badgeWrapRow}>
             <Text style={styles.passBadgeText}>🥂 KÈO ĐI CHƠI</Text>
             <View
               style={[
@@ -63,7 +67,7 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
             </View>
           </View>
 
-          <Text style={[styles.ticketTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+          <Text style={[styles.ticketTitle, { color: colors.textPrimary }]} numberOfLines={2}>
             {item.title}
           </Text>
         </View>
@@ -73,7 +77,7 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
           onPress={() => {
             openAddressInGoogleMaps(
               plan?.address || plan?.locationName,
-              plan?.googleMapsUrl
+              plan?.googleMapsUrl,
             );
           }}
         >
@@ -86,7 +90,7 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
 
       {/* TIME & LOCATION MAIN ROW */}
       <View style={styles.infoRow}>
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, minWidth: 140 }}>
           <Text style={[styles.metaLabel, { color: colors.textSecondary }]}>THỜI GIAN ĐÓN</Text>
           <Text style={[styles.metaValue, { color: colors.primary }]}>
             ⏰ {item.eventDate} ({item.notifyAtTime})
@@ -94,7 +98,7 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
         </View>
 
         {Boolean(plan?.estimatedBudget) && (
-          <View style={{ alignItems: 'flex-end' }}>
+          <View style={isSmallScreen ? { alignItems: 'flex-start' } : { alignItems: 'flex-end' }}>
             <Text style={[styles.metaLabel, { color: colors.textSecondary }]}>DỰ TRÙ TỔNG</Text>
             <Text style={[styles.metaValue, { color: '#15803D' }]}>
               💰 ~{plan?.estimatedBudget?.toLocaleString('vi-VN')}đ
@@ -110,7 +114,7 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
             📍 {plan?.locationName || 'Địa điểm chính'}
           </Text>
           {Boolean(plan?.address) && (
-            <Text style={[styles.locationSub, { color: colors.textSecondary }]} numberOfLines={1}>
+            <Text style={[styles.locationSub, { color: colors.textSecondary }]} numberOfLines={2}>
               {plan?.address}
             </Text>
           )}
@@ -131,7 +135,10 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
             {plan.stops.map((s) => (
               <React.Fragment key={s.id}>
                 <Text style={{ color: colors.textSecondary, fontSize: 10 }}>➔</Text>
-                <Text style={[styles.stepChipText, { color: colors.textPrimary }]} numberOfLines={1}>
+                <Text
+                  style={[styles.stepChipText, { color: colors.textPrimary, flexShrink: 1 }]}
+                  numberOfLines={1}
+                >
                   {s.timeHm} {s.title}
                 </Text>
               </React.Fragment>
@@ -142,7 +149,7 @@ export const DatePlanTicketCard: React.FC<DatePlanTicketCardProps> = ({
 
       {/* FOOTER ACTIONS */}
       <View style={styles.cardFooter}>
-        <View style={{ flexDirection: 'row', gap: 6 }}>
+        <View style={styles.tagsWrapRow}>
           {activityMeta && (
             <View style={[styles.tagBadge, { backgroundColor: colors.surfaceVariant }]}>
               <Text style={{ fontSize: 11, color: colors.textPrimary }}>
@@ -173,19 +180,28 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 14,
     borderWidth: 1,
+    width: '100%',
   },
   ticketHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
+    gap: 8,
+  },
+  badgeWrapRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
   },
   passBadgeText: { fontSize: 10, fontWeight: '900', color: '#8B5CF6', letterSpacing: 0.5 },
   statusPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  ticketTitle: { fontSize: 16, fontWeight: '800', marginTop: 4 },
+  ticketTitle: { fontSize: 16, fontWeight: '800', marginTop: 4, lineHeight: 22 },
   mapShortcutBtn: {
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 10,
+    flexShrink: 0,
   },
   mapShortcutText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
   dashedLine: {
@@ -195,8 +211,10 @@ const styles = StyleSheet.create({
   },
   infoRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 10,
     marginBottom: 10,
   },
   metaLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
@@ -207,7 +225,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   locationTitle: { fontSize: 13, fontWeight: '700' },
-  locationSub: { fontSize: 11, marginTop: 2 },
+  locationSub: { fontSize: 11, marginTop: 2, lineHeight: 16 },
   routeSummaryBox: { marginBottom: 10 },
   routeStepsContainer: {
     flexDirection: 'row',
@@ -218,9 +236,17 @@ const styles = StyleSheet.create({
   stepChipText: { fontSize: 11, fontWeight: '700' },
   cardFooter: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 8,
     paddingTop: 8,
+  },
+  tagsWrapRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    flex: 1,
   },
   tagBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
 });

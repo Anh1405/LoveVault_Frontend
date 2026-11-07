@@ -12,6 +12,7 @@ import {
   Platform,
   Alert,
   Image,
+  useWindowDimensions,
 } from 'react-native';
 import { DateTimeField } from './DateTimeField';
 import * as ImagePicker from 'expo-image-picker';
@@ -29,18 +30,15 @@ import { styles } from './modalSharedStyles';
 
 const PARTNER_BACKUP_KEY_PREFIX = 'lovevault_couple_profile_backup_v2_';
 
-// Kiểm tra xem URI ảnh có hợp lệ hay là link blob cũ đã bị trình duyệt hủy
 const sanitizeAvatarUri = (uri: string | null | undefined): string | null => {
   if (!uri || typeof uri !== 'string') return null;
   const trimmed = uri.trim();
   if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return null;
 
-  // Cho phép dạng Base64 vĩnh viễn
   if (trimmed.startsWith('data:image/')) {
     return trimmed;
   }
 
-  // Loại bỏ link blob tạm thời trên Web
   if (Platform.OS === 'web' && trimmed.startsWith('blob:')) {
     return null;
   }
@@ -48,7 +46,6 @@ const sanitizeAvatarUri = (uri: string | null | undefined): string | null => {
   return trimmed;
 };
 
-// Nén ảnh trên Web sang chuỗi Data URL (Base64) nhỏ gọn để không bao giờ bị mất khi F5/thoát app
 const compressWebImageToDataUrl = (srcUri: string, maxSize = 240): Promise<string | null> => {
   if (Platform.OS !== 'web' || typeof document === 'undefined') return Promise.resolve(srcUri);
   return new Promise((resolve) => {
@@ -79,7 +76,6 @@ const compressWebImageToDataUrl = (srcUri: string, maxSize = 240): Promise<strin
   });
 };
 
-// Chuyển đổi ảnh sang định dạng lưu trữ bền vững trên cả Web và Mobile
 const saveAvatarPermanently = async (
   uri: string | null,
   base64Data?: string | null,
@@ -97,7 +93,11 @@ const saveAvatarPermanently = async (
   const cleanUri = sanitizeAvatarUri(uri);
   if (!cleanUri) return null;
 
-  if (cleanUri.startsWith('data:image') || cleanUri.startsWith('http://') || cleanUri.startsWith('https://')) {
+  if (
+    cleanUri.startsWith('data:image') ||
+    cleanUri.startsWith('http://') ||
+    cleanUri.startsWith('https://')
+  ) {
     return cleanUri;
   }
 
@@ -106,7 +106,6 @@ const saveAvatarPermanently = async (
   }
 
   try {
-    // Đọc sang Base64 trên thiết bị thật để đồng bộ được sang máy người yêu mà không bị trắng ảnh
     const base64FromFile = await FileSystem.readAsStringAsync(cleanUri, {
       encoding: FileSystem.EncodingType.Base64,
     });
@@ -114,7 +113,7 @@ const saveAvatarPermanently = async (
       return `data:image/jpeg;base64,${base64FromFile}`;
     }
   } catch {
-    // Fallback copy sang thư mục Document nếu không đọc được base64
+    // Fallback copy sang thư mục Document
   }
 
   if (FileSystem.documentDirectory && cleanUri.includes(FileSystem.documentDirectory)) {
@@ -142,7 +141,6 @@ interface MemberBackupEntry {
 }
 
 interface ProfileBackupPayload {
-  // Lưu tách biệt theo ID thực tế của từng thành viên, tuyệt đối không lưu my.../partner... chung cho cả phòng
   membersById: Record<string, MemberBackupEntry>;
 }
 
@@ -166,7 +164,10 @@ const readProfileBackup = async (backupKey: string): Promise<ProfileBackupPayloa
   return null;
 };
 
-const writeProfileBackup = async (backupKey: string, payload: ProfileBackupPayload): Promise<void> => {
+const writeProfileBackup = async (
+  backupKey: string,
+  payload: ProfileBackupPayload,
+): Promise<void> => {
   try {
     const serialized = JSON.stringify(payload);
     if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
@@ -188,12 +189,17 @@ export const ProfileModal: React.FC<{
   coupleId: string | null;
   onClose: () => void;
 }> = ({ visible, colors, coupleId, onClose }) => {
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const isSmallScreen = screenWidth < 360;
+  const isLargeScreen = screenWidth >= 640;
+
   const { user } = useAuthStore();
   const activeStoreUserId = useSettingsStore((s) => s.activeUserId);
   const currentUserId = user?.id || activeStoreUserId || null;
 
-  // Khóa backup gắn với cả coupleId VÀ currentUserId để không bao giờ bị lẫn giữa 2 tài khoản
-  const backupKey = `${PARTNER_BACKUP_KEY_PREFIX}${coupleId || 'no_couple'}_${currentUserId || 'guest'}`;
+  const backupKey = `${PARTNER_BACKUP_KEY_PREFIX}${coupleId || 'no_couple'}_${
+    currentUserId || 'guest'
+  }`;
 
   const {
     myProfile,
@@ -247,12 +253,9 @@ export const ProfileModal: React.FC<{
   const prevVisibleRef = useRef(false);
   const isDirtyRef = useRef(false);
 
-  // Chỉ gửi avatar lên server khi người dùng THỰC SỰ vừa chọn ảnh mới cho người đó.
-  // Tránh việc mỗi lần Lưu đều ghi đè avatar của người kia bằng bản cache cũ/null.
   const myAvatarChangedRef = useRef(false);
   const partnerAvatarChangedRef = useRef(false);
 
-  // Xóa bộ nhớ backup v1 cũ (nếu có) từng gây lỗi trộn hồ sơ giữa 2 tài khoản
   useEffect(() => {
     if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage && coupleId) {
       const legacyKey = `lovevault_couple_profile_backup_${coupleId}`;
@@ -260,7 +263,6 @@ export const ProfileModal: React.FC<{
     }
   }, [coupleId]);
 
-  // Đồng bộ state từ Store (+ Backup theo đúng ID từng người) khi Modal được mở ra
   useEffect(() => {
     if (visible && !prevVisibleRef.current) {
       isDirtyRef.current = false;
@@ -281,7 +283,6 @@ export const ProfileModal: React.FC<{
       setPartnerAvatarUri(cleanPartnerAvatar);
 
       if (currentUserId) {
-        // Đảm bảo partnerKey KHÔNG BAO GIỜ trùng với currentUserId
         const safePartnerKey =
           partnerProfile.userId && String(partnerProfile.userId) !== String(currentUserId)
             ? partnerProfile.userId
@@ -297,11 +298,11 @@ export const ProfileModal: React.FC<{
             setMyAvatarUri((cur) => cur || sanitizeAvatarUri(myBackup.avatarUri));
           }
           if (partnerBackup) {
-            // Không lấy backup của partner nếu nó bị trùng y hệt avatar của mình do lỗi cũ
             const backupPartnerAvatar = sanitizeAvatarUri(partnerBackup.avatarUri);
             const isClonedFromMe =
               backupPartnerAvatar &&
-              (backupPartnerAvatar === cleanMyAvatar || backupPartnerAvatar === myBackup?.avatarUri);
+              (backupPartnerAvatar === cleanMyAvatar ||
+                backupPartnerAvatar === myBackup?.avatarUri);
 
             setPartnerBirthIso((cur) => cur || partnerBackup.birthDate || null);
             if (!isClonedFromMe) {
@@ -319,7 +320,6 @@ export const ProfileModal: React.FC<{
     prevVisibleRef.current = visible;
   }, [visible, backupKey, currentUserId, myProfile, partnerProfile, myPrivateNote]);
 
-  // Nếu dữ liệu từ Server đồng bộ về sau khi Modal đang mở (và người dùng chưa tự tay sửa gì), tự cập nhật lên UI
   useEffect(() => {
     if (!visible || isDirtyRef.current) return;
     setMyNick(myProfile.nickname);
@@ -352,8 +352,8 @@ export const ProfileModal: React.FC<{
       const isMine = cp.ownerUserId
         ? String(cp.ownerUserId) === String(currentUserId)
         : cp.ownerSlot
-          ? cp.ownerSlot === 'USER_1'
-          : idx % 2 === 0;
+        ? cp.ownerSlot === 'USER_1'
+        : idx % 2 === 0;
 
       if (isMine) {
         mine.push(cp);
@@ -384,7 +384,6 @@ export const ProfileModal: React.FC<{
     return { overall, foodMatch, telepathy };
   }, [myNick, partnerNick, myBirthIso, partnerBirthIso]);
 
-  // Chọn ảnh đại diện và chuyển ngay sang chuỗi Base64 bền vững (Không dùng link blob tạm thời)
   const pickAvatar = async (target: 'ME' | 'PARTNER') => {
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
@@ -397,7 +396,7 @@ export const ProfileModal: React.FC<{
       isDirtyRef.current = true;
       const asset = res.assets[0];
       const permanentDataUri = await saveAvatarPermanently(asset.uri, asset.base64);
-      if (!permanentDataUri) return; // không có ảnh hợp lệ thì không đổi gì
+      if (!permanentDataUri) return;
       if (target === 'ME') {
         myAvatarChangedRef.current = true;
         setMyAvatarBroken(false);
@@ -427,20 +426,9 @@ export const ProfileModal: React.FC<{
     const finalDesc = cpDesc.trim() || 'Áp dụng khi được đối phương duyệt';
 
     if (editingCouponId) {
-      await updateLoveCoupon(
-        editingCouponId,
-        finalTitle,
-        finalDesc,
-        cpIcon,
-        cpTargetOwner,
-      );
+      await updateLoveCoupon(editingCouponId, finalTitle, finalDesc, cpIcon, cpTargetOwner);
     } else {
-      await addLoveCoupon(
-        finalTitle,
-        finalDesc,
-        cpIcon,
-        cpTargetOwner,
-      );
+      await addLoveCoupon(finalTitle, finalDesc, cpIcon, cpTargetOwner);
     }
     setCouponOwnerFilter(cpTargetOwner === 'ME' ? 'MINE' : 'PARTNER');
     resetCouponForm();
@@ -500,15 +488,11 @@ export const ProfileModal: React.FC<{
     );
   };
 
-  // Lưu thông tin profile. Avatar chỉ được gửi lên server cho người nào vừa được đổi ảnh,
-  // tránh ghi đè avatar của người kia bằng bản cache cũ/null.
   const handleSaveProfile = async () => {
     const myAvatarChanged = myAvatarChangedRef.current && !!myAvatarUri;
     const partnerAvatarChanged = partnerAvatarChangedRef.current && !!partnerAvatarUri;
 
-    const permanentMyAvatar = myAvatarChanged
-      ? await saveAvatarPermanently(myAvatarUri)
-      : null;
+    const permanentMyAvatar = myAvatarChanged ? await saveAvatarPermanently(myAvatarUri) : null;
     const permanentPartnerAvatar = partnerAvatarChanged
       ? await saveAvatarPermanently(partnerAvatarUri)
       : null;
@@ -516,7 +500,6 @@ export const ProfileModal: React.FC<{
     const finalMyBirth = myBirthIso || null;
     const finalPartnerBirth = partnerBirthIso || null;
 
-    // 1. Lưu bản sao dự phòng cục bộ theo ID từng người
     if (currentUserId) {
       const safePartnerKey =
         partnerProfile.userId && String(partnerProfile.userId) !== String(currentUserId)
@@ -533,20 +516,22 @@ export const ProfileModal: React.FC<{
           [currentUserId]: {
             nickname: myNick.trim() || 'Bạn',
             birthDate: finalMyBirth,
-            // Không bao giờ ghi null đè lên avatar đã có trong backup
-            avatarUri: permanentMyAvatar ?? sanitizeAvatarUri(myAvatarUri) ?? prevMy?.avatarUri ?? null,
+            avatarUri:
+              permanentMyAvatar ?? sanitizeAvatarUri(myAvatarUri) ?? prevMy?.avatarUri ?? null,
           },
           [safePartnerKey]: {
             nickname: partnerNick.trim() || 'Người ấy',
             birthDate: finalPartnerBirth,
             avatarUri:
-              permanentPartnerAvatar ?? sanitizeAvatarUri(partnerAvatarUri) ?? prevPartner?.avatarUri ?? null,
+              permanentPartnerAvatar ??
+              sanitizeAvatarUri(partnerAvatarUri) ??
+              prevPartner?.avatarUri ??
+              null,
           },
         },
       });
     }
 
-    // 2. Cập nhật Store: chỉ kèm avatarUri khi avatar đó thực sự vừa được đổi
     const myPatch: Partial<PersonProfile> = {
       nickname: myNick.trim() || 'Bạn',
       birthDate: finalMyBirth,
@@ -567,7 +552,6 @@ export const ProfileModal: React.FC<{
 
     await updateProfiles(myPatch, partnerPatch);
 
-    // 3. Cập nhật Ghi chú riêng
     await updateMyPrivateNote({
       favDrink,
       shoeClothSize,
@@ -591,13 +575,33 @@ export const ProfileModal: React.FC<{
 
   const activeCouponList = couponOwnerFilter === 'MINE' ? myCoupons : partnerCoupons;
 
+  const responsiveSheetStyle = {
+    width: '100%' as const,
+    maxWidth: isLargeScreen ? 600 : ('100%' as const),
+    maxHeight: Math.round(screenHeight * (isLargeScreen ? 0.88 : 0.92)),
+    alignSelf: 'center' as const,
+    borderBottomLeftRadius: isLargeScreen ? 24 : 0,
+    borderBottomRightRadius: isLargeScreen ? 24 : 0,
+    marginBottom: isLargeScreen ? 20 : 0,
+  };
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        style={[styles.backdrop, { backgroundColor: colors.backdrop }]}
+        style={[
+          styles.backdrop,
+          { backgroundColor: colors.backdrop },
+          isLargeScreen && { justifyContent: 'center', padding: 16 },
+        ]}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={[styles.sheetCard, { backgroundColor: colors.surface }]}>
+        <View
+          style={[
+            styles.sheetCard,
+            { backgroundColor: colors.surface },
+            responsiveSheetStyle,
+          ]}
+        >
           <View style={styles.sheetDragHandle} />
           <Text style={[styles.sheetTitle, { color: colors.textPrimary }]}>
             Không gian & Hồ sơ cặp đôi
@@ -627,7 +631,7 @@ export const ProfileModal: React.FC<{
               >
                 <Text
                   style={{
-                    fontSize: 12,
+                    fontSize: isSmallScreen ? 11 : 12,
                     fontWeight: profileTab === t.id ? '700' : '500',
                     color: profileTab === t.id ? colors.textPrimary : colors.textSecondary,
                   }}
@@ -672,8 +676,16 @@ export const ProfileModal: React.FC<{
                 </View>
 
                 <View style={[styles.profileSection, { borderColor: colors.borderSubtle }]}>
-                  <View style={styles.sectionHeaderRow}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                  <View style={[styles.sectionHeaderRow, { flexWrap: 'wrap', gap: 8 }]}>
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 10,
+                        flex: 1,
+                        minWidth: 160,
+                      }}
+                    >
                       <View
                         style={{
                           width: 40,
@@ -690,7 +702,6 @@ export const ProfileModal: React.FC<{
                             source={{ uri: myAvatarUri }}
                             style={{ width: 40, height: 40 }}
                             resizeMode="cover"
-                            // Chỉ ẩn ảnh lỗi trên UI, KHÔNG xóa state để tránh ghi null lên server
                             onError={() => setMyAvatarBroken(true)}
                           />
                         ) : (
@@ -698,7 +709,10 @@ export const ProfileModal: React.FC<{
                         )}
                       </View>
                       <Text
-                        style={[styles.subHeading, { color: colors.textPrimary, marginBottom: 0, flex: 1 }]}
+                        style={[
+                          styles.subHeading,
+                          { color: colors.textPrimary, marginBottom: 0, flex: 1 },
+                        ]}
                         numberOfLines={1}
                       >
                         Bạn ({myNick.trim() || myProfile.nickname})
@@ -706,17 +720,29 @@ export const ProfileModal: React.FC<{
                     </View>
 
                     <Pressable
-                      style={[styles.inlineActionChip, { backgroundColor: colors.primaryContainer }]}
+                      style={[
+                        styles.inlineActionChip,
+                        { backgroundColor: colors.primaryContainer },
+                      ]}
                       onPress={() => void pickAvatar('ME')}
                     >
-                      <Text style={{ color: colors.onPrimaryContainer, fontSize: 12, fontWeight: '700' }}>
+                      <Text
+                        style={{
+                          color: colors.onPrimaryContainer,
+                          fontSize: 12,
+                          fontWeight: '700',
+                        }}
+                      >
                         Đổi ảnh đại diện
                       </Text>
                     </Pressable>
                   </View>
 
                   <TextInput
-                    style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                    style={[
+                      styles.inputBox,
+                      { borderColor: colors.outline, color: colors.textPrimary },
+                    ]}
                     value={myNick}
                     onChangeText={(txt) => {
                       isDirtyRef.current = true;
@@ -726,9 +752,17 @@ export const ProfileModal: React.FC<{
                     placeholderTextColor={colors.textSecondary}
                   />
 
-                  <View style={styles.rowBetween}>
+                  <View
+                    style={[
+                      styles.rowBetween,
+                      isSmallScreen && { flexWrap: 'wrap', gap: 8 },
+                    ]}
+                  >
                     <Pressable
-                      style={[styles.dateBtn, { borderColor: colors.outline, flex: 1, marginRight: 10 }]}
+                      style={[
+                        styles.dateBtn,
+                        { borderColor: colors.outline, flex: 1, minWidth: 170, marginRight: isSmallScreen ? 0 : 10 },
+                      ]}
                       onPress={() => openDatePicker('ME')}
                     >
                       <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '500' }}>
@@ -747,8 +781,16 @@ export const ProfileModal: React.FC<{
                 </View>
 
                 <View style={[styles.profileSection, { borderColor: colors.borderSubtle }]}>
-                  <View style={styles.sectionHeaderRow}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                  <View style={[styles.sectionHeaderRow, { flexWrap: 'wrap', gap: 8 }]}>
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 10,
+                        flex: 1,
+                        minWidth: 160,
+                      }}
+                    >
                       <View
                         style={{
                           width: 40,
@@ -765,7 +807,6 @@ export const ProfileModal: React.FC<{
                             source={{ uri: partnerAvatarUri }}
                             style={{ width: 40, height: 40 }}
                             resizeMode="cover"
-                            // Chỉ ẩn ảnh lỗi trên UI, KHÔNG xóa state để tránh ghi null lên server
                             onError={() => setPartnerAvatarBroken(true)}
                           />
                         ) : (
@@ -773,7 +814,10 @@ export const ProfileModal: React.FC<{
                         )}
                       </View>
                       <Text
-                        style={[styles.subHeading, { color: colors.textPrimary, marginBottom: 0, flex: 1 }]}
+                        style={[
+                          styles.subHeading,
+                          { color: colors.textPrimary, marginBottom: 0, flex: 1 },
+                        ]}
                         numberOfLines={1}
                       >
                         Người thương ({partnerNick.trim() || partnerProfile.nickname})
@@ -781,17 +825,29 @@ export const ProfileModal: React.FC<{
                     </View>
 
                     <Pressable
-                      style={[styles.inlineActionChip, { backgroundColor: colors.primaryContainer }]}
+                      style={[
+                        styles.inlineActionChip,
+                        { backgroundColor: colors.primaryContainer },
+                      ]}
                       onPress={() => void pickAvatar('PARTNER')}
                     >
-                      <Text style={{ color: colors.onPrimaryContainer, fontSize: 12, fontWeight: '700' }}>
+                      <Text
+                        style={{
+                          color: colors.onPrimaryContainer,
+                          fontSize: 12,
+                          fontWeight: '700',
+                        }}
+                      >
                         Đổi ảnh đại diện
                       </Text>
                     </Pressable>
                   </View>
 
                   <TextInput
-                    style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                    style={[
+                      styles.inputBox,
+                      { borderColor: colors.outline, color: colors.textPrimary },
+                    ]}
                     value={partnerNick}
                     onChangeText={(txt) => {
                       isDirtyRef.current = true;
@@ -801,9 +857,17 @@ export const ProfileModal: React.FC<{
                     placeholderTextColor={colors.textSecondary}
                   />
 
-                  <View style={styles.rowBetween}>
+                  <View
+                    style={[
+                      styles.rowBetween,
+                      isSmallScreen && { flexWrap: 'wrap', gap: 8 },
+                    ]}
+                  >
                     <Pressable
-                      style={[styles.dateBtn, { borderColor: colors.outline, flex: 1, marginRight: 10 }]}
+                      style={[
+                        styles.dateBtn,
+                        { borderColor: colors.outline, flex: 1, minWidth: 170, marginRight: isSmallScreen ? 0 : 10 },
+                      ]}
                       onPress={() => openDatePicker('PARTNER')}
                     >
                       <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '500' }}>
@@ -870,7 +934,12 @@ export const ProfileModal: React.FC<{
                   <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
                     Phiếu này dành cho ai sử dụng?
                   </Text>
-                  <View style={styles.twoColRow}>
+                  <View
+                    style={[
+                      styles.twoColRow,
+                      isSmallScreen && { flexDirection: 'column' },
+                    ]}
+                  >
                     <Pressable
                       style={[
                         styles.optionPill,
@@ -903,7 +972,8 @@ export const ProfileModal: React.FC<{
                         styles.optionPill,
                         {
                           flex: 1,
-                          borderColor: cpTargetOwner === 'PARTNER' ? colors.primary : colors.outline,
+                          borderColor:
+                            cpTargetOwner === 'PARTNER' ? colors.primary : colors.outline,
                           backgroundColor:
                             cpTargetOwner === 'PARTNER' ? colors.primaryContainer : colors.surface,
                         },
@@ -926,7 +996,7 @@ export const ProfileModal: React.FC<{
                     </Pressable>
                   </View>
 
-                  <View style={[styles.rowBetween, { marginTop: 4 }]}>
+                  <View style={[styles.rowBetween, { marginTop: 4, flexWrap: 'wrap', gap: 6 }]}>
                     {['🎟', '🧋', '💆', '🎬', '🍜', '🛍'].map((ic) => (
                       <Pressable
                         key={ic}
@@ -945,7 +1015,11 @@ export const ProfileModal: React.FC<{
                   <TextInput
                     style={[
                       styles.inputBox,
-                      { borderColor: colors.outline, color: colors.textPrimary, backgroundColor: colors.surface },
+                      {
+                        borderColor: colors.outline,
+                        color: colors.textPrimary,
+                        backgroundColor: colors.surface,
+                      },
                     ]}
                     placeholder="Tên phiếu (VD: Bao trà sữa / Miễn rửa bát)"
                     placeholderTextColor={colors.textSecondary}
@@ -956,7 +1030,11 @@ export const ProfileModal: React.FC<{
                   <TextInput
                     style={[
                       styles.inputBox,
-                      { borderColor: colors.outline, color: colors.textPrimary, backgroundColor: colors.surface },
+                      {
+                        borderColor: colors.outline,
+                        color: colors.textPrimary,
+                        backgroundColor: colors.surface,
+                      },
                     ]}
                     placeholder="Điều kiện áp dụng (Cần người kia duyệt)"
                     placeholderTextColor={colors.textSecondary}
@@ -970,7 +1048,13 @@ export const ProfileModal: React.FC<{
                         style={[styles.secondaryBtn, { backgroundColor: colors.surface }]}
                         onPress={resetCouponForm}
                       >
-                        <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: 13 }}>
+                        <Text
+                          style={{
+                            color: colors.textSecondary,
+                            fontWeight: '600',
+                            fontSize: 13,
+                          }}
+                        >
                           Hủy
                         </Text>
                       </Pressable>
@@ -1022,19 +1106,32 @@ export const ProfileModal: React.FC<{
                       numberOfLines={1}
                     >
                       Của {partnerNick.trim() || partnerProfile.nickname} ({partnerCoupons.length})
-                      {pendingPartnerRequestsCount > 0 ? ` • 🔔 ${pendingPartnerRequestsCount}` : ''}
+                      {pendingPartnerRequestsCount > 0
+                        ? ` • 🔔 ${pendingPartnerRequestsCount}`
+                        : ''}
                     </Text>
                   </Pressable>
                 </View>
 
                 <Text style={[styles.helperSubText, { color: colors.textSecondary }]}>
                   {couponOwnerFilter === 'MINE'
-                    ? `Khi bạn bấm "Xin dùng phiếu", ${partnerNick.trim() || partnerProfile.nickname} phải bấm "Cho phép" thì phiếu mới được áp dụng.`
-                    : `Đây là các phiếu của ${partnerNick.trim() || partnerProfile.nickname}. Khi ${partnerNick.trim() || partnerProfile.nickname} muốn dùng, bạn là người bấm "Cho phép" tại đây.`}
+                    ? `Khi bạn bấm "Xin dùng phiếu", ${
+                        partnerNick.trim() || partnerProfile.nickname
+                      } phải bấm "Cho phép" thì phiếu mới được áp dụng.`
+                    : `Đây là các phiếu của ${
+                        partnerNick.trim() || partnerProfile.nickname
+                      }. Khi ${
+                        partnerNick.trim() || partnerProfile.nickname
+                      } muốn dùng, bạn là người bấm "Cho phép" tại đây.`}
                 </Text>
 
                 {activeCouponList.length === 0 ? (
-                  <View style={[styles.funBox, { backgroundColor: colors.surfaceVariant, alignItems: 'center' }]}>
+                  <View
+                    style={[
+                      styles.funBox,
+                      { backgroundColor: colors.surfaceVariant, alignItems: 'center' },
+                    ]}
+                  >
                     <Text style={{ fontSize: 13, fontWeight: '600', color: colors.textSecondary }}>
                       Chưa có phiếu hẹn nào trong ngăn này.
                     </Text>
@@ -1069,11 +1166,26 @@ export const ProfileModal: React.FC<{
                             >
                               {cp.icon}  {cp.title}
                             </Text>
-                            <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 4, lineHeight: 18 }}>
+                            <Text
+                              style={{
+                                fontSize: 12,
+                                color: colors.textSecondary,
+                                marginTop: 4,
+                                lineHeight: 18,
+                              }}
+                            >
                               {cp.desc}
                             </Text>
 
-                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginTop: 10 }}>
+                            <View
+                              style={{
+                                flexDirection: 'row',
+                                flexWrap: 'wrap',
+                                alignItems: 'center',
+                                gap: 12,
+                                marginTop: 10,
+                              }}
+                            >
                               <Text
                                 style={{
                                   fontSize: 11,
@@ -1081,26 +1193,41 @@ export const ProfileModal: React.FC<{
                                   color: isUsed
                                     ? colors.success
                                     : isPending
-                                      ? '#D97706'
-                                      : colors.primary,
+                                    ? '#D97706'
+                                    : colors.primary,
                                 }}
                               >
                                 {isUsed
                                   ? `✓ Đã được duyệt & sử dụng`
                                   : isPending
-                                    ? isMine
-                                      ? `⏳ Chờ ${partnerNick.trim() || partnerProfile.nickname} duyệt...`
-                                      : `🔔 ${partnerNick.trim() || partnerProfile.nickname} xin dùng!`
-                                    : 'Sẵn sàng sử dụng'}
+                                  ? isMine
+                                    ? `⏳ Chờ ${
+                                        partnerNick.trim() || partnerProfile.nickname
+                                      } duyệt...`
+                                    : `🔔 ${
+                                        partnerNick.trim() || partnerProfile.nickname
+                                      } xin dùng!`
+                                  : 'Sẵn sàng sử dụng'}
                               </Text>
 
                               <Pressable onPress={() => startEditCoupon(cp, isMine)} hitSlop={8}>
-                                <Text style={{ fontSize: 12, fontWeight: '600', color: colors.primary }}>
+                                <Text
+                                  style={{
+                                    fontSize: 12,
+                                    fontWeight: '600',
+                                    color: colors.primary,
+                                  }}
+                                >
                                   Sửa
                                 </Text>
                               </Pressable>
-                              <Pressable onPress={() => void deleteLoveCoupon(cp.id)} hitSlop={8}>
-                                <Text style={{ fontSize: 12, fontWeight: '600', color: colors.error }}>
+                              <Pressable
+                                onPress={() => void deleteLoveCoupon(cp.id)}
+                                hitSlop={8}
+                              >
+                                <Text
+                                  style={{ fontSize: 12, fontWeight: '600', color: colors.error }}
+                                >
                                   Xóa
                                 </Text>
                               </Pressable>
@@ -1135,7 +1262,13 @@ export const ProfileModal: React.FC<{
                               ]}
                               onPress={() => void handleCancelMyCouponRequest(cp)}
                             >
-                              <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textSecondary }}>
+                              <Text
+                                style={{
+                                  fontSize: 11,
+                                  fontWeight: '700',
+                                  color: colors.textSecondary,
+                                }}
+                              >
                                 Hủy
                               </Text>
                             </Pressable>
@@ -1149,7 +1282,13 @@ export const ProfileModal: React.FC<{
                               ]}
                               onPress={() => void toggleLoveCouponUsed(cp.id)}
                             >
-                              <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textSecondary }}>
+                              <Text
+                                style={{
+                                  fontSize: 11,
+                                  fontWeight: '700',
+                                  color: colors.textSecondary,
+                                }}
+                              >
                                 Cấp lại
                               </Text>
                             </Pressable>
@@ -1159,7 +1298,7 @@ export const ProfileModal: React.FC<{
                         {!isMine && isPending && (
                           <View
                             style={{
-                              flexDirection: 'row',
+                              flexDirection: isSmallScreen ? 'column' : 'row',
                               gap: 8,
                               marginTop: 12,
                               paddingTop: 12,
@@ -1179,7 +1318,10 @@ export const ProfileModal: React.FC<{
                               }}
                               onPress={() => void handlePartnerApproveOrReject(cp, true)}
                             >
-                              <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }} numberOfLines={1}>
+                              <Text
+                                style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}
+                                numberOfLines={1}
+                              >
                                 ✓ Cho phép {partnerNick.trim() || partnerProfile.nickname} dùng
                               </Text>
                             </Pressable>
@@ -1195,7 +1337,9 @@ export const ProfileModal: React.FC<{
                               }}
                               onPress={() => void handlePartnerApproveOrReject(cp, false)}
                             >
-                              <Text style={{ color: colors.error, fontSize: 12, fontWeight: '700' }}>
+                              <Text
+                                style={{ color: colors.error, fontSize: 12, fontWeight: '700' }}
+                              >
                                 ✕ Từ chối
                               </Text>
                             </Pressable>
@@ -1219,13 +1363,16 @@ export const ProfileModal: React.FC<{
                     {compatibilityStats.overall}%
                   </Text>
                   <Text style={{ fontSize: 12, color: colors.textSecondary }}>
-                    Ăn uống: {compatibilityStats.foodMatch}%  •  Đồng điệu: {compatibilityStats.telepathy}%
+                    Ăn uống: {compatibilityStats.foodMatch}%  •  Đồng điệu:{' '}
+                    {compatibilityStats.telepathy}%
                   </Text>
                 </View>
 
                 <View style={[styles.funBox, { backgroundColor: colors.surfaceVariant }]}>
                   <View style={styles.sectionHeaderRow}>
-                    <Text style={[styles.subHeading, { color: colors.textPrimary, marginBottom: 0 }]}>
+                    <Text
+                      style={[styles.subHeading, { color: colors.textPrimary, marginBottom: 0 }]}
+                    >
                       Gợi ý hẹn hò
                     </Text>
                     <Pressable
@@ -1237,7 +1384,15 @@ export const ProfileModal: React.FC<{
                       </Text>
                     </Pressable>
                   </View>
-                  <Text style={{ fontSize: 14, fontWeight: '600', color: colors.primary, marginTop: 4, lineHeight: 20 }}>
+                  <Text
+                    style={{
+                      fontSize: 14,
+                      fontWeight: '600',
+                      color: colors.primary,
+                      marginTop: 4,
+                      lineHeight: 20,
+                    }}
+                  >
                     {randomIdea}
                   </Text>
                 </View>
@@ -1253,7 +1408,10 @@ export const ProfileModal: React.FC<{
                   Món ăn / Đồ uống {partnerNick} thích
                 </Text>
                 <TextInput
-                  style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                  style={[
+                    styles.inputBox,
+                    { borderColor: colors.outline, color: colors.textPrimary },
+                  ]}
                   value={favDrink}
                   onChangeText={setFavDrink}
                   placeholder="VD: Trà sữa ít đường, trân châu trắng..."
@@ -1264,7 +1422,10 @@ export const ProfileModal: React.FC<{
                   Cỡ trang phục & Giày của {partnerNick}
                 </Text>
                 <TextInput
-                  style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                  style={[
+                    styles.inputBox,
+                    { borderColor: colors.outline, color: colors.textPrimary },
+                  ]}
                   value={shoeClothSize}
                   onChangeText={setShoeClothSize}
                   placeholder="VD: Áo size M, giày size 37..."
@@ -1275,7 +1436,10 @@ export const ProfileModal: React.FC<{
                   Bí kíp khi cần dỗ dành {partnerNick}
                 </Text>
                 <TextInput
-                  style={[styles.inputBox, { borderColor: colors.outline, color: colors.textPrimary }]}
+                  style={[
+                    styles.inputBox,
+                    { borderColor: colors.outline, color: colors.textPrimary },
+                  ]}
                   value={howToComfort}
                   onChangeText={setHowToComfort}
                   placeholder="VD: Mua đồ ngọt, ôm một cái..."
@@ -1306,13 +1470,17 @@ export const ProfileModal: React.FC<{
               style={[styles.secondaryBtn, { backgroundColor: colors.surfaceVariant }]}
               onPress={onClose}
             >
-              <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: 14 }}>Đóng</Text>
+              <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: 14 }}>
+                Đóng
+              </Text>
             </Pressable>
             <Pressable
               style={[styles.primaryBtn, { backgroundColor: colors.primary }]}
               onPress={() => void handleSaveProfile()}
             >
-              <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 14 }}>Lưu thay đổi</Text>
+              <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 14 }}>
+                Lưu thay đổi
+              </Text>
             </Pressable>
           </View>
         </View>

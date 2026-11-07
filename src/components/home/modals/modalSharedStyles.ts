@@ -7,6 +7,9 @@ export const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheetCard: {
+    width: '100%',
+    maxWidth: 640,
+    alignSelf: 'center',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     paddingHorizontal: 20,
@@ -61,27 +64,31 @@ export const styles = StyleSheet.create({
     marginBottom: 12,
   },
   inputBox: {
-    height: 48,
+    minHeight: 48,
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 14,
     fontSize: 14,
     marginBottom: 14,
+    width: '100%',
   },
   multilineInput: {
-    height: 84,
+    minHeight: 84,
     textAlignVertical: 'top',
     paddingTop: 12,
     paddingBottom: 12,
   },
   rowBetween: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 8,
     marginBottom: 12,
   },
   sectionHeaderRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 12,
@@ -102,20 +109,25 @@ export const styles = StyleSheet.create({
   },
   twoColRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 10,
   },
   twoColFormRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'flex-end',
     gap: 10,
   },
   colItem: {
     flex: 1,
+    minWidth: 140,
   },
   moodRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
+    gap: 6,
     marginBottom: 16,
   },
   moodChip: {
@@ -135,7 +147,7 @@ export const styles = StyleSheet.create({
     marginBottom: 10,
   },
   dateBtn: {
-    height: 48,
+    minHeight: 48,
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 14,
@@ -240,6 +252,7 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 8,
     paddingVertical: 8,
   },
   cleanSectionCard: {
@@ -335,6 +348,7 @@ export const styles = StyleSheet.create({
   },
   stepperCardHeader: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
@@ -356,6 +370,7 @@ export const styles = StyleSheet.create({
   },
   actionFooter: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 12,
     paddingTop: 12,
     marginTop: 4,
@@ -363,7 +378,8 @@ export const styles = StyleSheet.create({
   },
   secondaryBtn: {
     flex: 1,
-    height: 48,
+    minWidth: 100,
+    minHeight: 48,
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
@@ -371,7 +387,8 @@ export const styles = StyleSheet.create({
   },
   primaryBtn: {
     flex: 2,
-    height: 48,
+    minWidth: 130,
+    minHeight: 48,
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',

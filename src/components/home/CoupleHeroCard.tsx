@@ -12,6 +12,7 @@ import {
   Image,
   ImageBackground,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { ThemeColors, METRICS } from '../../constants/theme';
@@ -44,6 +45,9 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
   onPressOpenProfile,
   onSendMissYou,
 }) => {
+  const { width: screenWidth } = useWindowDimensions();
+  const isSmallScreen = screenWidth < 360;
+
   const {
     myProfile,
     partnerProfile,
@@ -62,15 +66,19 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
   const [chamberParticles, setChamberParticles] = useState<ChamberParticle[]>([]);
   const [comboCount, setComboCount] = useState<number>(0);
 
-  // State quản lý lỗi hiển thị ảnh
   const [myAvatarError, setMyAvatarError] = useState(false);
   const [partnerAvatarError, setPartnerAvatarError] = useState(false);
   const [wallpaperError, setWallpaperError] = useState(false);
 
-  // Reset trạng thái lỗi khi URI thay đổi
-  useEffect(() => { setMyAvatarError(false); }, [myProfile.avatarUri]);
-  useEffect(() => { setPartnerAvatarError(false); }, [partnerProfile.avatarUri]);
-  useEffect(() => { setWallpaperError(false); }, [heroWallpaperUri]);
+  useEffect(() => {
+    setMyAvatarError(false);
+  }, [myProfile.avatarUri]);
+  useEffect(() => {
+    setPartnerAvatarError(false);
+  }, [partnerProfile.avatarUri]);
+  useEffect(() => {
+    setWallpaperError(false);
+  }, [heroWallpaperUri]);
 
   const heartPulse = useRef(new Animated.Value(1)).current;
   const chamberScale = useRef(new Animated.Value(1)).current;
@@ -244,7 +252,13 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
   const secondaryTextColor = hasWallpaper ? 'rgba(255,255,255,0.78)' : colors.textSecondary;
 
   const renderCardInner = () => (
-    <View style={[styles.innerWrap, hasWallpaper && { backgroundColor: colors.heroGradientOverlay }]}>
+    <View
+      style={[
+        styles.innerWrap,
+        isSmallScreen && { paddingHorizontal: 14, paddingTop: 18 },
+        hasWallpaper && { backgroundColor: colors.heroGradientOverlay },
+      ]}
+    >
       {/* HÀNG AVATAR & Ô TƯƠNG TÁC TRUNG TÂM */}
       <View style={styles.coupleAvatarRow}>
         <Pressable style={styles.personCol} onPress={onPressOpenProfile}>
@@ -277,13 +291,14 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
           </Text>
         </Pressable>
 
-        {/* Ô TƯƠNG TÁC TRÁI TIM TỐI GIẢN */}
+        {/* Ô TƯƠNG TÁC TRÁI TIM */}
         <Animated.View style={{ transform: [{ scale: chamberScale }] }}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Chạm biểu tượng cảm xúc"
             style={[
               styles.heartChamberBox,
+              isSmallScreen && { width: 68, height: 64 },
               {
                 borderColor: hasWallpaper ? 'rgba(255,255,255,0.22)' : colors.borderSubtle,
                 backgroundColor: hasWallpaper
@@ -335,12 +350,7 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
               {socialPrefs.heartBoxSkin}
             </Animated.Text>
 
-            <Text
-              style={[
-                styles.chamberCounterLabel,
-                { color: secondaryTextColor },
-              ]}
-            >
+            <Text style={[styles.chamberCounterLabel, { color: secondaryTextColor }]}>
               {comboCount > 1 ? `x${comboCount}` : heartTapTotal > 0 ? `${heartTapTotal}` : 'Chạm'}
             </Text>
           </Pressable>
@@ -398,7 +408,7 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
       ) : (
         <View style={styles.counterCenterWrap}>
           {counterStyle === 'YMD_BREAKDOWN' ? (
-            <View style={styles.ymdGrid}>
+            <View style={[styles.ymdGrid, isSmallScreen && { gap: 18 }]}>
               <View style={styles.ymdCell}>
                 <Text style={[styles.ymdVal, { color: primaryTextColor }]}>{timeStats.years}</Text>
                 <Text style={[styles.ymdLbl, { color: secondaryTextColor }]}>năm</Text>
@@ -414,7 +424,15 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
             </View>
           ) : (
             <View style={styles.bigDaysRow}>
-              <Text style={[styles.bigDaysNumber, { color: primaryTextColor }]}>
+              <Text
+                style={[
+                  styles.bigDaysNumber,
+                  isSmallScreen && { fontSize: 44 },
+                  { color: primaryTextColor },
+                ]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
                 {timeStats.totalDays}
               </Text>
               <Text style={[styles.bigDaysUnit, { color: secondaryTextColor }]}>ngày</Text>
@@ -456,31 +474,47 @@ export const CoupleHeroCard: React.FC<CoupleHeroCardProps> = ({
       )}
 
       {/* HÀNG THÔNG TIN NGÀY BẮT ĐẦU & GỬI TÍN HIỆU */}
-      <View style={[styles.heroFooterRow, { borderTopColor: hasWallpaper ? 'rgba(255,255,255,0.15)' : colors.borderSubtle }]}>
-        <Pressable
-          accessibilityRole="button"
-          style={styles.dateMetaBtn}
-          onPress={onPressEditAnniversary}
-          hitSlop={8}
-        >
-          <Text style={[styles.dateMetaLabel, { color: secondaryTextColor }]}>Từ ngày</Text>
-          <Text style={[styles.dateMetaValue, { color: primaryTextColor }]}>
-            {anniversaryIso || 'Chưa chọn'}
-          </Text>
-        </Pressable>
+      <View
+        style={[
+          styles.heroFooterRow,
+          { borderTopColor: hasWallpaper ? 'rgba(255,255,255,0.15)' : colors.borderSubtle },
+        ]}
+      >
+        <View style={styles.heroMetaCluster}>
+          <Pressable
+            accessibilityRole="button"
+            style={styles.dateMetaBtn}
+            onPress={onPressEditAnniversary}
+            hitSlop={8}
+          >
+            <Text style={[styles.dateMetaLabel, { color: secondaryTextColor }]}>Từ ngày</Text>
+            <Text style={[styles.dateMetaValue, { color: primaryTextColor }]}>
+              {anniversaryIso || 'Chưa chọn'}
+            </Text>
+          </Pressable>
 
-        <View style={[styles.verticalDivider, { backgroundColor: hasWallpaper ? 'rgba(255,255,255,0.15)' : colors.borderSubtle }]} />
+          <View
+            style={[
+              styles.verticalDivider,
+              { backgroundColor: hasWallpaper ? 'rgba(255,255,255,0.15)' : colors.borderSubtle },
+            ]}
+          />
 
-        <View style={styles.dateMetaBtn}>
-          <Text style={[styles.dateMetaLabel, { color: secondaryTextColor }]}>Tương tác</Text>
-          <Text style={[styles.dateMetaValue, { color: primaryTextColor }]}>
-            {streakDays} ngày liên tiếp
-          </Text>
+          <View style={styles.dateMetaBtn}>
+            <Text style={[styles.dateMetaLabel, { color: secondaryTextColor }]}>Tương tác</Text>
+            <Text style={[styles.dateMetaValue, { color: primaryTextColor }]}>
+              {streakDays} ngày
+            </Text>
+          </View>
         </View>
 
         <Pressable
           accessibilityRole="button"
-          style={[styles.sendMissYouBtn, { backgroundColor: colors.primary }]}
+          style={[
+            styles.sendMissYouBtn,
+            { backgroundColor: colors.primary },
+            isSmallScreen && { paddingHorizontal: 12 },
+          ]}
           onPress={() => {
             triggerHeartChamberEffect();
             onSendMissYou();
@@ -543,10 +577,15 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around', // ĐÃ SỬA LỖI TẠI ĐÂY (dòng 546)
+    justifyContent: 'space-around',
+    gap: 8,
     marginBottom: 14,
   },
-  personCol: { alignItems: 'center', width: 88 },
+  personCol: {
+    alignItems: 'center',
+    flex: 1,
+    maxWidth: 110,
+  },
   avatarOuterBox: {
     width: 60,
     height: 60,
@@ -588,7 +627,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   moodEmojiText: { fontSize: 12 },
-  personName: { fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  personName: { fontSize: 13, fontWeight: '600', textAlign: 'center', width: '100%' },
   heartChamberBox: {
     width: 78,
     height: 70,
@@ -641,6 +680,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
     marginTop: 2,
+    textAlign: 'center',
     fontVariant: ['tabular-nums'],
   },
   milestoneProgressWrap: { width: '100%', marginTop: 16, marginBottom: 16 },
@@ -656,10 +696,18 @@ const styles = StyleSheet.create({
   heroFooterRow: {
     width: '100%',
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 10,
     paddingTop: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  heroMetaCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flexShrink: 1,
   },
   dateMetaBtn: {
     justifyContent: 'center',

@@ -12,6 +12,7 @@ import {
   KeyboardAvoidingView,
   ActivityIndicator,
   Keyboard,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api } from '../services/api';
@@ -22,6 +23,10 @@ import { PALETTE, METRICS } from '../constants/theme';
 
 export const RegisterScreen = ({ navigation }: any) => {
   const insets = useSafeAreaInsets();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const isSmallDevice = screenWidth < 360 || screenHeight < 680;
+  const isLargeDevice = screenWidth >= 600;
+
   const emailInputRef = useRef<TextInput>(null);
   const passwordInputRef = useRef<TextInput>(null);
   const isSubmittingRef = useRef(false);
@@ -157,146 +162,166 @@ export const RegisterScreen = ({ navigation }: any) => {
   }, [fullName, email, password, emailConflictError, loading, setAuth]);
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+    <View
+      style={[
+        styles.screen,
+        {
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        },
+      ]}
+    >
       <StatusBar barStyle="dark-content" backgroundColor={PALETTE.background} />
       <KeyboardAvoidingView
         style={styles.flexOne}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingVertical: isSmallDevice ? 16 : 28 },
+          ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.headerBlock}>
-            <Text style={styles.brandTitle}>Bắt đầu hành trình</Text>
-            <Text style={styles.brandSubtitle}>Tạo tài khoản để kết nối dữ liệu cùng đối phương</Text>
-          </View>
-
-          {errorMessage && (
-            <View style={styles.errorBanner}>
-              <Text style={styles.errorBannerText}>{errorMessage}</Text>
+          <View style={[styles.responsiveContainer, isLargeDevice && styles.largeDeviceCard]}>
+            <View style={[styles.headerBlock, isSmallDevice && { marginBottom: 20 }]}>
+              <Text style={[styles.brandTitle, isSmallDevice && { fontSize: 24 }]}>
+                Bắt đầu hành trình
+              </Text>
+              <Text style={styles.brandSubtitle}>
+                Tạo tài khoản để kết nối dữ liệu cùng đối phương
+              </Text>
             </View>
-          )}
 
-          <View style={styles.formGroup}>
-            <Text style={styles.fieldLabel}>Họ và tên của bạn</Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder="Ví dụ: Nguyễn Văn A"
-              placeholderTextColor={PALETTE.textSecondary}
-              value={fullName}
-              onChangeText={(text) => {
-                setFullName(text);
-                if (errorMessage) setErrorMessage(null);
-              }}
-              editable={!loading}
-              returnKeyType="next"
-              onSubmitEditing={() => emailInputRef.current?.focus()}
-              blurOnSubmit={false}
-            />
-          </View>
-
-          <View style={styles.formGroup}>
-            <View style={styles.labelRow}>
-              <Text style={styles.fieldLabel}>Địa chỉ Email</Text>
-              {checkingEmail && <Text style={styles.checkingText}>Đang kiểm tra...</Text>}
-            </View>
-            <TextInput
-              ref={emailInputRef}
-              style={[styles.textInput, emailConflictError ? styles.inputErrorBorder : null]}
-              placeholder="tenban@gmail.com"
-              placeholderTextColor={PALETTE.textSecondary}
-              value={email}
-              onChangeText={handleEmailChange}
-              onBlur={handleEmailBlur}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-              spellCheck={false}
-              textContentType="emailAddress"
-              autoComplete="email"
-              editable={!loading}
-              returnKeyType="next"
-              onSubmitEditing={() => passwordInputRef.current?.focus()}
-              blurOnSubmit={false}
-            />
-            {emailConflictError && (
-              <Text style={styles.fieldErrorText}>{emailConflictError}</Text>
+            {errorMessage && (
+              <View style={styles.errorBanner}>
+                <Text style={styles.errorBannerText}>{errorMessage}</Text>
+              </View>
             )}
-            {emailSuggestion && (
-              <Pressable
-                style={styles.suggestionBox}
-                onPress={() => applyEmailSuggestion(emailSuggestion)}
-              >
-                <Text style={styles.suggestionText}>
-                  Có phải ý bạn là <Text style={styles.suggestionHighlight}>{emailSuggestion}</Text>? Bấm vào đây để sửa.
-                </Text>
-              </Pressable>
-            )}
-          </View>
 
-          <View style={styles.formGroup}>
-            <Text style={styles.fieldLabel}>Mật khẩu bảo vệ</Text>
-            <View style={styles.inputWrapper}>
+            <View style={styles.formGroup}>
+              <Text style={styles.fieldLabel}>Họ và tên của bạn</Text>
               <TextInput
-                ref={passwordInputRef}
-                style={[styles.textInput, styles.passwordInputPadding]}
-                placeholder="Ít nhất 8 ký tự (Hoa, thường, số)"
+                style={styles.textInput}
+                placeholder="Ví dụ: Nguyễn Văn A"
                 placeholderTextColor={PALETTE.textSecondary}
-                secureTextEntry={!isPasswordVisible}
-                value={password}
+                value={fullName}
                 onChangeText={(text) => {
-                  setPassword(text);
+                  setFullName(text);
                   if (errorMessage) setErrorMessage(null);
                 }}
+                editable={!loading}
+                returnKeyType="next"
+                onSubmitEditing={() => emailInputRef.current?.focus()}
+                blurOnSubmit={false}
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <View style={styles.labelRow}>
+                <Text style={styles.fieldLabel}>Địa chỉ Email</Text>
+                {checkingEmail && <Text style={styles.checkingText}>Đang kiểm tra...</Text>}
+              </View>
+              <TextInput
+                ref={emailInputRef}
+                style={[styles.textInput, emailConflictError ? styles.inputErrorBorder : null]}
+                placeholder="tenban@gmail.com"
+                placeholderTextColor={PALETTE.textSecondary}
+                value={email}
+                onChangeText={handleEmailChange}
+                onBlur={handleEmailBlur}
+                keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
-                textContentType="newPassword"
+                spellCheck={false}
+                textContentType="emailAddress"
+                autoComplete="email"
                 editable={!loading}
-                returnKeyType="done"
-                onSubmitEditing={handleRegister}
+                returnKeyType="next"
+                onSubmitEditing={() => passwordInputRef.current?.focus()}
+                blurOnSubmit={false}
               />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={isPasswordVisible ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-                style={styles.eyeToggleBtn}
-                onPress={() => setPasswordVisible((prev) => !prev)}
-                hitSlop={8}
-              >
-                <Text style={styles.eyeToggleText}>{isPasswordVisible ? 'ẨN' : 'HIỆN'}</Text>
-              </Pressable>
+              {emailConflictError && (
+                <Text style={styles.fieldErrorText}>{emailConflictError}</Text>
+              )}
+              {emailSuggestion && (
+                <Pressable
+                  style={styles.suggestionBox}
+                  onPress={() => applyEmailSuggestion(emailSuggestion)}
+                >
+                  <Text style={styles.suggestionText}>
+                    Có phải ý bạn là{' '}
+                    <Text style={styles.suggestionHighlight}>{emailSuggestion}</Text>? Bấm vào đây để sửa.
+                  </Text>
+                </Pressable>
+              )}
             </View>
-          </View>
 
-          <Pressable
-            accessibilityRole="button"
-            style={({ pressed }) => [
-              styles.primaryButton,
-              pressed && { backgroundColor: PALETTE.primaryPressed },
-              (loading || checkingEmail) && styles.buttonDisabled,
-            ]}
-            android_ripple={{ color: PALETTE.rippleLight }}
-            onPress={handleRegister}
-            disabled={loading || checkingEmail}
-          >
-            {loading ? (
-              <ActivityIndicator color={PALETTE.surface} size="small" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Hoàn tất đăng ký</Text>
-            )}
-          </Pressable>
+            <View style={styles.formGroup}>
+              <Text style={styles.fieldLabel}>Mật khẩu bảo vệ</Text>
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  ref={passwordInputRef}
+                  style={[styles.textInput, styles.passwordInputPadding]}
+                  placeholder="Ít nhất 8 ký tự (Hoa, thường, số)"
+                  placeholderTextColor={PALETTE.textSecondary}
+                  secureTextEntry={!isPasswordVisible}
+                  value={password}
+                  onChangeText={(text) => {
+                    setPassword(text);
+                    if (errorMessage) setErrorMessage(null);
+                  }}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="newPassword"
+                  editable={!loading}
+                  returnKeyType="done"
+                  onSubmitEditing={handleRegister}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={isPasswordVisible ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  style={styles.eyeToggleBtn}
+                  onPress={() => setPasswordVisible((prev) => !prev)}
+                  hitSlop={8}
+                >
+                  <Text style={styles.eyeToggleText}>{isPasswordVisible ? 'ẨN' : 'HIỆN'}</Text>
+                </Pressable>
+              </View>
+            </View>
 
-          <View style={styles.footerRow}>
-            <Text style={styles.footerPrompt}>Đã có tài khoản từ trước?</Text>
             <Pressable
               accessibilityRole="button"
-              style={styles.linkTouchTarget}
-              onPress={() => navigation.navigate('Login')}
-              disabled={loading}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                pressed && { backgroundColor: PALETTE.primaryPressed },
+                (loading || checkingEmail) && styles.buttonDisabled,
+              ]}
+              android_ripple={{ color: PALETTE.rippleLight }}
+              onPress={handleRegister}
+              disabled={loading || checkingEmail}
             >
-              <Text style={styles.linkText}>Đăng nhập ngay</Text>
+              {loading ? (
+                <ActivityIndicator color={PALETTE.surface} size="small" />
+              ) : (
+                <Text style={styles.primaryButtonText}>Hoàn tất đăng ký</Text>
+              )}
             </Pressable>
+
+            <View style={[styles.footerRow, isSmallDevice && { marginTop: 20 }]}>
+              <Text style={styles.footerPrompt}>Đã có tài khoản từ trước?</Text>
+              <Pressable
+                accessibilityRole="button"
+                style={styles.linkTouchTarget}
+                onPress={() => navigation.navigate('Login')}
+                disabled={loading}
+              >
+                <Text style={styles.linkText}>Đăng nhập ngay</Text>
+              </Pressable>
+            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -310,10 +335,32 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
+    alignItems: 'center',
     paddingHorizontal: METRICS.paddingHorizontal,
-    paddingVertical: 24,
   },
-  headerBlock: { marginBottom: 32 },
+  responsiveContainer: {
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
+  },
+  largeDeviceCard: {
+    backgroundColor: PALETTE.surface,
+    padding: 32,
+    borderRadius: METRICS.radiusMd,
+    borderWidth: 1,
+    borderColor: PALETTE.outline,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.06,
+        shadowRadius: 16,
+      },
+      android: { elevation: 3 },
+      web: { boxShadow: '0 8px 28px rgba(0,0,0,0.06)' } as any,
+    }),
+  },
+  headerBlock: { marginBottom: 28 },
   brandTitle: {
     fontSize: 28,
     fontWeight: '800',
@@ -344,6 +391,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 6,
+    flexWrap: 'wrap',
+    gap: 4,
   },
   fieldLabel: {
     fontSize: 13,
@@ -369,6 +418,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     fontSize: 15,
     color: PALETTE.textPrimary,
+    width: '100%',
   },
   inputErrorBorder: {
     borderColor: PALETTE.error,
@@ -418,6 +468,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 12,
     elevation: 2,
+    width: '100%',
   },
   buttonDisabled: { opacity: 0.65 },
   primaryButtonText: {
@@ -429,6 +480,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    flexWrap: 'wrap',
     marginTop: 28,
   },
   footerPrompt: {
