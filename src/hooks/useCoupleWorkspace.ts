@@ -2,6 +2,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Alert, Linking, AppState, AppStateStatus, Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import {
+  SyncItem,
+  TombMap,
+  diffAndStamp,
+  withTombstones,
+  mergeWithCloud,
+} from '../utils/roomSyncMerge';
 import * as Haptics from 'expo-haptics';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { api } from '../services/api';
@@ -23,19 +30,19 @@ export type SyncStatus = 'SYNCED' | 'PENDING_SYNC';
 export type QuestionCategory = 'ALL' | 'FUNNY' | 'DEEP' | 'FUTURE';
 
 export type DatePlanActivityType =
-  | 'EAT_AND_DRINK'
-  | 'EAT'
-  | 'DRINK'
-  | 'MOVIE'
-  | 'WALK'
-  | 'OTHER';
+    | 'EAT_AND_DRINK'
+    | 'EAT'
+    | 'DRINK'
+    | 'MOVIE'
+    | 'WALK'
+    | 'OTHER';
 
 export type TransportMode =
-  | 'PICKUP'
-  | 'MOTORBIKE'
-  | 'CAR_TAXI'
-  | 'BUS_METRO'
-  | 'WALK';
+    | 'PICKUP'
+    | 'MOTORBIKE'
+    | 'CAR_TAXI'
+    | 'BUS_METRO'
+    | 'WALK';
 
 export interface DatePlanStop {
   id: string;
@@ -70,6 +77,8 @@ export interface ImportantEvent {
   id: string;
   title: string;
   eventDate: string;
+  updatedAt?: string;
+  deletedAt?: string | null;
   category: 'ANNIVERSARY' | 'BIRTHDAY' | 'DATE_PLAN' | 'CUSTOM';
   notifyDaysBefore: number;
   notifyAtTime: string;
@@ -454,28 +463,28 @@ export const SAIGON_BUS_ROUTES: SaigonBusRoute[] = [
 export function normalizeVietnameseText(input?: string): string {
   if (!input) return '';
   return input
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 }
 
 export function computeHaversineMeters(
-  lat1: number,
-  lng1: number,
-  lat2: number,
-  lng2: number,
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
 ): number {
   const R = 6371000;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
   const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) *
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) *
       Math.cos(toRad(lat2)) *
       Math.sin(dLng / 2) *
       Math.sin(dLng / 2);
@@ -484,7 +493,7 @@ export function computeHaversineMeters(
 }
 
 export function extractCoordinatesFromMapsUrl(
-  url?: string,
+    url?: string,
 ): { lat: number; lng: number } | null {
   if (!url) return null;
   const atMatch = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
@@ -501,9 +510,9 @@ export function extractCoordinatesFromMapsUrl(
 const geocodeMemoryCache = new Map<string, { lat: number; lng: number }>();
 
 export async function resolveSaigonPlaceCoordinates(
-  queryText?: string,
-  directMapsUrl?: string,
-  fallbackCoords?: { lat: number; lng: number } | null,
+    queryText?: string,
+    directMapsUrl?: string,
+    fallbackCoords?: { lat: number; lng: number } | null,
 ): Promise<{
   stop: SaigonBusStop;
   walkingMeters: number;
@@ -582,13 +591,13 @@ export async function resolveSaigonPlaceCoordinates(
   try {
     const searchQuery = encodeURIComponent(`${queryText?.trim()}, Thành phố Hồ Chí Minh, Việt Nam`);
     const response = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${searchQuery}`,
-      {
-        headers: {
-          Accept: 'application/json',
-          'User-Agent': 'LoveVaultCoupleApp/1.0',
+        `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${searchQuery}`,
+        {
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': 'LoveVaultCoupleApp/1.0',
+          },
         },
-      },
     );
 
     if (response.ok) {
@@ -620,8 +629,8 @@ export async function resolveSaigonPlaceCoordinates(
 }
 
 export function findNearestBusStopByCoords(
-  lat: number,
-  lng: number,
+    lat: number,
+    lng: number,
 ): { stop: SaigonBusStop; distanceMeters: number } {
   const allStops = Object.values(SAIGON_BUS_STOPS);
   let nearest = allStops[0];
@@ -639,37 +648,37 @@ export function findNearestBusStopByCoords(
 }
 
 export function buildGoogleMapsTransitUrl(
-  destinationQuery: string,
-  originQuery?: string,
+    destinationQuery: string,
+    originQuery?: string,
 ): string {
   const destEncoded = encodeURIComponent(
-    destinationQuery.toLowerCase().includes('hồ chí minh')
-      ? destinationQuery.trim()
-      : `${destinationQuery.trim()}, TP. Hồ Chí Minh`,
+      destinationQuery.toLowerCase().includes('hồ chí minh')
+          ? destinationQuery.trim()
+          : `${destinationQuery.trim()}, TP. Hồ Chí Minh`,
   );
   const originParam = originQuery?.trim()
-    ? `&origin=${encodeURIComponent(
-        originQuery.toLowerCase().includes('hồ chí minh')
-          ? originQuery.trim()
-          : `${originQuery.trim()}, TP. Hồ Chí Minh`,
+      ? `&origin=${encodeURIComponent(
+          originQuery.toLowerCase().includes('hồ chí minh')
+              ? originQuery.trim()
+              : `${originQuery.trim()}, TP. Hồ Chí Minh`,
       )}`
-    : '';
+      : '';
   return `https://www.google.com/maps/dir/?api=1${originParam}&destination=${destEncoded}&travelmode=transit`;
 }
 
 function buildLegBetweenStops(
-  route: SaigonBusRoute,
-  fromStopId: string,
-  toStopId: string,
+    route: SaigonBusRoute,
+    fromStopId: string,
+    toStopId: string,
 ): BusTransitLeg | null {
   const idxA = route.stopIds.indexOf(fromStopId);
   const idxB = route.stopIds.indexOf(toStopId);
   if (idxA === -1 || idxB === -1 || idxA === idxB) return null;
 
   const orderedIds =
-    idxA < idxB
-      ? route.stopIds.slice(idxA, idxB + 1)
-      : route.stopIds.slice(idxB, idxA + 1).reverse();
+      idxA < idxB
+          ? route.stopIds.slice(idxA, idxB + 1)
+          : route.stopIds.slice(idxB, idxA + 1).reverse();
 
   const stops = orderedIds.map((id) => SAIGON_BUS_STOPS[id]).filter(Boolean);
   if (stops.length < 2) return null;
@@ -693,7 +702,7 @@ function buildLegBetweenStops(
 }
 
 export async function findSaigonBusItineraries(
-  params: FindSaigonBusParams,
+    params: FindSaigonBusParams,
 ): Promise<BusRouteItinerary[]> {
   const {
     originQuery,
@@ -706,14 +715,14 @@ export async function findSaigonBusItineraries(
 
   const [originResolved, destResolved] = await Promise.all([
     resolveSaigonPlaceCoordinates(
-      originQuery || 'Chợ Bến Thành',
-      undefined,
-      originCoords,
+        originQuery || 'Chợ Bến Thành',
+        undefined,
+        originCoords,
     ),
     resolveSaigonPlaceCoordinates(
-      destinationQuery,
-      destinationMapsUrl,
-      destinationCoords,
+        destinationQuery,
+        destinationMapsUrl,
+        destinationCoords,
     ),
   ]);
 
@@ -727,7 +736,7 @@ export async function findSaigonBusItineraries(
 
   if (startStop.id === endStop.id) {
     const passingRoutes = SAIGON_BUS_ROUTES.filter((r) =>
-      r.stopIds.includes(startStop.id),
+        r.stopIds.includes(startStop.id),
     );
     for (const route of passingRoutes.slice(0, maxResults)) {
       const leg: BusTransitLeg = {
@@ -762,7 +771,7 @@ export async function findSaigonBusItineraries(
   }
 
   const walkMinutes = Math.round(
-    (originResolved.walkingMeters + destResolved.walkingMeters) / 80,
+      (originResolved.walkingMeters + destResolved.walkingMeters) / 80,
   );
 
   for (const route of SAIGON_BUS_ROUTES) {
@@ -790,10 +799,10 @@ export async function findSaigonBusItineraries(
   }
 
   const routesFromStart = SAIGON_BUS_ROUTES.filter((r) =>
-    r.stopIds.includes(startStop.id),
+      r.stopIds.includes(startStop.id),
   );
   const routesToEnd = SAIGON_BUS_ROUTES.filter((r) =>
-    r.stopIds.includes(endStop.id),
+      r.stopIds.includes(endStop.id),
   );
 
   for (const r1 of routesFromStart) {
@@ -801,17 +810,17 @@ export async function findSaigonBusItineraries(
       if (r1.routeNo === r2.routeNo) continue;
 
       if (
-        r1.stopIds.includes(endStop.id) ||
-        r2.stopIds.includes(startStop.id)
+          r1.stopIds.includes(endStop.id) ||
+          r2.stopIds.includes(startStop.id)
       ) {
         continue;
       }
 
       const commonStopIds = r1.stopIds.filter(
-        (stopId) =>
-          stopId !== startStop.id &&
-          stopId !== endStop.id &&
-          r2.stopIds.includes(stopId),
+          (stopId) =>
+              stopId !== startStop.id &&
+              stopId !== endStop.id &&
+              r2.stopIds.includes(stopId),
       );
 
       for (const transferStopId of commonStopIds) {
@@ -821,10 +830,10 @@ export async function findSaigonBusItineraries(
 
         const transferStop = SAIGON_BUS_STOPS[transferStopId];
         const totalMinutes =
-          leg1.estimatedRideMinutes +
-          leg2.estimatedRideMinutes +
-          walkMinutes +
-          8;
+            leg1.estimatedRideMinutes +
+            leg2.estimatedRideMinutes +
+            walkMinutes +
+            8;
         const totalFare = leg1.fareVnd + leg2.fareVnd;
         const totalStudentFare = leg1.studentFareVnd + leg2.studentFareVnd;
 
@@ -848,17 +857,17 @@ export async function findSaigonBusItineraries(
   }
 
   return itineraries
-    .sort((a, b) => {
-      if (a.transferCount !== b.transferCount) {
-        return a.transferCount - b.transferCount;
-      }
-      return a.totalEstimatedMinutes - b.totalEstimatedMinutes;
-    })
-    .slice(0, maxResults);
+      .sort((a, b) => {
+        if (a.transferCount !== b.transferCount) {
+          return a.transferCount - b.transferCount;
+        }
+        return a.totalEstimatedMinutes - b.totalEstimatedMinutes;
+      })
+      .slice(0, maxResults);
 }
 
 export function searchSaigonBusRoutesByKeyword(
-  keyword: string,
+    keyword: string,
 ): SaigonBusRoute[] {
   const norm = normalizeVietnameseText(keyword);
   if (!norm) return SAIGON_BUS_ROUTES;
@@ -870,27 +879,27 @@ export function searchSaigonBusRoutesByKeyword(
     return route.stopIds.some((stopId) => {
       const stop = SAIGON_BUS_STOPS[stopId];
       return (
-        stop &&
-        (normalizeVietnameseText(stop.name).includes(norm) ||
-          stop.keywords.some((k) => k.includes(norm)))
+          stop &&
+          (normalizeVietnameseText(stop.name).includes(norm) ||
+              stop.keywords.some((k) => k.includes(norm)))
       );
     });
   });
 }
 
 export async function openAddressInGoogleMaps(
-  addressOrPlace?: string,
-  directMapsUrl?: string,
-  transportMode?: TransportMode,
-  originAddress?: string,
+    addressOrPlace?: string,
+    directMapsUrl?: string,
+    transportMode?: TransportMode,
+    originAddress?: string,
 ): Promise<void> {
   const isTransitMode = transportMode === 'BUS_METRO';
   const cleanDirect = directMapsUrl?.trim();
 
   if (
-    !isTransitMode &&
-    cleanDirect &&
-    (cleanDirect.startsWith('http://') || cleanDirect.startsWith('https://'))
+      !isTransitMode &&
+      cleanDirect &&
+      (cleanDirect.startsWith('http://') || cleanDirect.startsWith('https://'))
   ) {
     try {
       await Linking.openURL(cleanDirect);
@@ -903,25 +912,25 @@ export async function openAddressInGoogleMaps(
   const rawQuery = addressOrPlace?.trim();
   if (!rawQuery && !cleanDirect) {
     Alert.alert(
-      'Chưa có địa chỉ',
-      'Vui lòng nhập tên quán, địa chỉ hoặc dán link Google Maps để mở bản đồ chỉ đường.',
+        'Chưa có địa chỉ',
+        'Vui lòng nhập tên quán, địa chỉ hoặc dán link Google Maps để mở bản đồ chỉ đường.',
     );
     return;
   }
 
   const normalizedDest =
-    rawQuery && !rawQuery.toLowerCase().includes('hồ chí minh')
-      ? `${rawQuery}, TP. Hồ Chí Minh`
-      : rawQuery || '';
+      rawQuery && !rawQuery.toLowerCase().includes('hồ chí minh')
+          ? `${rawQuery}, TP. Hồ Chí Minh`
+          : rawQuery || '';
 
   const encodedDest = encodeURIComponent(normalizedDest);
   const encodedOrigin = originAddress?.trim()
-    ? encodeURIComponent(
-        originAddress.toLowerCase().includes('hồ chí minh')
-          ? originAddress.trim()
-          : `${originAddress.trim()}, TP. Hồ Chí Minh`,
+      ? encodeURIComponent(
+          originAddress.toLowerCase().includes('hồ chí minh')
+              ? originAddress.trim()
+              : `${originAddress.trim()}, TP. Hồ Chí Minh`,
       )
-    : '';
+      : '';
 
   let nativeScheme: string | undefined;
   let webUrl: string;
@@ -956,14 +965,14 @@ export async function openAddressInGoogleMaps(
 }
 
 export async function openBusDirectionsInGoogleMaps(
-  destinationAddress: string,
-  originAddress?: string,
+    destinationAddress: string,
+    originAddress?: string,
 ): Promise<void> {
   return openAddressInGoogleMaps(
-    destinationAddress,
-    undefined,
-    'BUS_METRO',
-    originAddress,
+      destinationAddress,
+      undefined,
+      'BUS_METRO',
+      originAddress,
   );
 }
 
@@ -986,11 +995,11 @@ export function parseMomoTransactionText(rawText: string): {
   if (!Number.isFinite(amount) || amount < 1000) return null;
 
   const isOutgoing =
-    prefix === '-' ||
-    prefix.includes('chuyển') ||
-    prefix.includes('trừ') ||
-    prefix.includes('rút') ||
-    prefix.includes('thanh toán');
+      prefix === '-' ||
+      prefix.includes('chuyển') ||
+      prefix.includes('trừ') ||
+      prefix.includes('rút') ||
+      prefix.includes('thanh toán');
 
   return {
     type: isOutgoing ? 'OUT' : 'IN',
@@ -1168,8 +1177,8 @@ export function useCoupleWorkspace() {
   const { myProfile, partnerProfile, socialPrefs, notificationPrefs } = useSettingsStore();
 
   const workspaceKeys = useMemo(
-    () => buildWorkspaceKeys(coupleId, currentUserId),
-    [coupleId, currentUserId],
+      () => buildWorkspaceKeys(coupleId, currentUserId),
+      [coupleId, currentUserId],
   );
 
   const [events, setEvents] = useState<ImportantEvent[]>([]);
@@ -1223,104 +1232,123 @@ export function useCoupleWorkspace() {
    */
   const cloudPullBusyRef = useRef(false);
   const cloudPushInFlightRef = useRef(0);
+  const tombsKey = useMemo(
+      () => `lovevault_room_tombs_v1_${coupleId || currentUserId || 'guest'}`,
+      [coupleId, currentUserId],
+  );
+  const tombsRef = useRef<{ events: TombMap; goals: TombMap }>({ events: {}, goals: {} });
 
+  const persistTombs = useCallback(() => {
+    storage.setItem(tombsKey, JSON.stringify(tombsRef.current)).catch(() => null);
+  }, [tombsKey]);
+
+// Gắn updatedAt cho mục mới/sửa, ghi tombstone cho mục bị xóa
+  const finalizeList = useCallback(
+      <T extends SyncItem>(kind: 'events' | 'goals', prev: T[], next: T[]): T[] => {
+        const result = diffAndStamp(prev, next, tombsRef.current[kind]);
+        tombsRef.current[kind] = result.tombs;
+        persistTombs();
+        return result.items;
+      },
+      [persistTombs],
+  );
   const syncRoomSnapshotToCloud = useCallback(
-    async (overrides?: {
-      events?: ImportantEvent[];
-      goals?: CoupleGoalItem[];
-      dailyQA?: DailyQAItem;
-      qaHistory?: DailyQAItem[];
-    }) => {
-      if (!coupleId) return;
-      cloudPushInFlightRef.current += 1;
-      try {
-        await pushCoupleRoomSnapshotToCloud({
-          coupleId,
-          events: overrides?.events ?? eventsRef.current,
-          goals: overrides?.goals ?? goalsRef.current,
-          dailyQA: overrides?.dailyQA ?? rawDailyQARef.current,
-          qaHistory: overrides?.qaHistory ?? qaHistoryRef.current,
-        });
-      } finally {
-        cloudPushInFlightRef.current -= 1;
-      }
-    },
-    [coupleId],
+      async (overrides?: {
+        events?: ImportantEvent[];
+        goals?: CoupleGoalItem[];
+        dailyQA?: DailyQAItem;
+        qaHistory?: DailyQAItem[];
+      }) => {
+        if (!coupleId) return;
+        cloudPushInFlightRef.current += 1;
+        try {
+          await pushCoupleRoomSnapshotToCloud({
+            coupleId,
+            events: withTombstones(overrides?.events ?? eventsRef.current, tombsRef.current.events),
+            goals: withTombstones(overrides?.goals ?? goalsRef.current, tombsRef.current.goals),
+            dailyQA: overrides?.dailyQA ?? rawDailyQARef.current,
+            qaHistory: overrides?.qaHistory ?? qaHistoryRef.current,
+          });
+        } finally {
+          cloudPushInFlightRef.current -= 1;
+        }
+      },
+      [coupleId],
   );
 
   const mapQAItemForCurrentUser = useCallback(
-    (item: DailyQAItem): DailyQAItem => {
-      const map = item.answersByUserId || {};
-      const myEntry = map[currentUserId];
-      const partnerEntry = Object.values(map).find((entry) => entry.userId !== currentUserId);
+      (item: DailyQAItem): DailyQAItem => {
+        const map = item.answersByUserId || {};
+        const myEntry = map[currentUserId];
+        const partnerEntry = Object.values(map).find((entry) => entry.userId !== currentUserId);
 
-      if (Object.keys(map).length > 0) {
-        return {
-          ...item,
-          myAnswer: myEntry?.answer || '',
-          partnerAnswer: partnerEntry?.answer || null,
-          answeredAt: myEntry?.answeredAt || null,
-        };
-      }
-      // Dữ liệu cũ chưa có answersByUserId: giữ câu trả lời của mình, bỏ câu mẫu của người kia
-      return { ...item, partnerAnswer: null };
-    },
-    [currentUserId],
+        if (Object.keys(map).length > 0) {
+          return {
+            ...item,
+            myAnswer: myEntry?.answer || '',
+            partnerAnswer: partnerEntry?.answer || null,
+            answeredAt: myEntry?.answeredAt || null,
+          };
+        }
+        // Dữ liệu cũ chưa có answersByUserId: giữ câu trả lời của mình, bỏ câu mẫu của người kia
+        return { ...item, partnerAnswer: null };
+      },
+      [currentUserId],
   );
 
   const dailyQA = useMemo(
-    () => mapQAItemForCurrentUser(rawDailyQA),
-    [rawDailyQA, mapQAItemForCurrentUser],
+      () => mapQAItemForCurrentUser(rawDailyQA),
+      [rawDailyQA, mapQAItemForCurrentUser],
   );
 
   const mappedQaHistory = useMemo(
-    () => qaHistory.map((h) => mapQAItemForCurrentUser(h)),
-    [qaHistory, mapQAItemForCurrentUser],
+      () => qaHistory.map((h) => mapQAItemForCurrentUser(h)),
+      [qaHistory, mapQAItemForCurrentUser],
   );
 
   const mappedLocketSnaps = useMemo(
-    () =>
-      locketSnaps.map((snap) => {
-        const isCurrentUsersSnap = snap.senderId
-          ? String(snap.senderId) === String(currentUserId)
-          : snap.senderName === myProfile.nickname;
-        return {
-          ...snap,
-          ownerId:
-            snap.ownerId || snap.senderId || (isCurrentUsersSnap ? String(currentUserId) : ''),
-          isMine: isCurrentUsersSnap,
-          senderName: isCurrentUsersSnap
-            ? myProfile.nickname
-            : snap.senderName && snap.senderName !== myProfile.nickname
-              ? snap.senderName
-              : partnerProfile.nickname,
-        };
-      }),
-    [locketSnaps, currentUserId, myProfile.nickname, partnerProfile.nickname],
+      () =>
+          locketSnaps.map((snap) => {
+            const isCurrentUsersSnap = snap.senderId
+                ? String(snap.senderId) === String(currentUserId)
+                : snap.senderName === myProfile.nickname;
+            return {
+              ...snap,
+              ownerId:
+                  snap.ownerId || snap.senderId || (isCurrentUsersSnap ? String(currentUserId) : ''),
+              isMine: isCurrentUsersSnap,
+              senderName: isCurrentUsersSnap
+                  ? myProfile.nickname
+                  : snap.senderName && snap.senderName !== myProfile.nickname
+                      ? snap.senderName
+                      : partnerProfile.nickname,
+            };
+          }),
+      [locketSnaps, currentUserId, myProfile.nickname, partnerProfile.nickname],
   );
 
   const findBusRoutesToDestination = useCallback(
-    async (params: FindSaigonBusParams): Promise<BusRouteItinerary[]> => {
-      if (!params.destinationQuery?.trim() && !params.destinationMapsUrl?.trim()) {
-        Alert.alert(
-          'Thiếu địa điểm đến',
-          'Vui lòng nhập tên địa điểm hoặc địa chỉ cần tới để tìm tuyến xe buýt phù hợp.',
-        );
-        return [];
-      }
+      async (params: FindSaigonBusParams): Promise<BusRouteItinerary[]> => {
+        if (!params.destinationQuery?.trim() && !params.destinationMapsUrl?.trim()) {
+          Alert.alert(
+              'Thiếu địa điểm đến',
+              'Vui lòng nhập tên địa điểm hoặc địa chỉ cần tới để tìm tuyến xe buýt phù hợp.',
+          );
+          return [];
+        }
 
-      setBusSearchLoading(true);
-      try {
-        const itineraries = await findSaigonBusItineraries(params);
-        setBusSearchResults(itineraries);
-        setSelectedBusItinerary(itineraries[0] || null);
-        void Haptics.selectionAsync().catch(() => null);
-        return itineraries;
-      } finally {
-        setBusSearchLoading(false);
-      }
-    },
-    [],
+        setBusSearchLoading(true);
+        try {
+          const itineraries = await findSaigonBusItineraries(params);
+          setBusSearchResults(itineraries);
+          setSelectedBusItinerary(itineraries[0] || null);
+          void Haptics.selectionAsync().catch(() => null);
+          return itineraries;
+        } finally {
+          setBusSearchLoading(false);
+        }
+      },
+      [],
   );
 
   const searchBusCatalog = useCallback((keyword: string): SaigonBusRoute[] => {
@@ -1330,331 +1358,335 @@ export function useCoupleWorkspace() {
   }, []);
 
   const buildDatePlanWithBusItinerary = useCallback(
-    (
-      basePlan: DatePlanDetails,
-      itinerary: BusRouteItinerary,
-    ): DatePlanDetails => {
-      return {
-        ...basePlan,
-        transport: 'BUS_METRO',
-        transportNote: itinerary.formattedTransportNote,
-        googleMapsUrl: basePlan.googleMapsUrl || itinerary.googleMapsTransitUrl,
-        selectedBusItinerary: itinerary,
-      };
-    },
-    [],
+      (
+          basePlan: DatePlanDetails,
+          itinerary: BusRouteItinerary,
+      ): DatePlanDetails => {
+        return {
+          ...basePlan,
+          transport: 'BUS_METRO',
+          transportNote: itinerary.formattedTransportNote,
+          googleMapsUrl: basePlan.googleMapsUrl || itinerary.googleMapsTransitUrl,
+          selectedBusItinerary: itinerary,
+        };
+      },
+      [],
   );
 
   const applyBusItineraryToEvent = useCallback(
-    async (eventId: string, itinerary: BusRouteItinerary) => {
-      setSelectedBusItinerary(itinerary);
-      setEvents((prev) => {
-        const next = prev.map((ev) => {
-          if (ev.id !== eventId || !ev.datePlan) return ev;
-          return {
-            ...ev,
-            datePlan: {
-              ...ev.datePlan,
-              transport: 'BUS_METRO' as TransportMode,
-              transportNote: itinerary.formattedTransportNote,
-              googleMapsUrl:
-                ev.datePlan.googleMapsUrl || itinerary.googleMapsTransitUrl,
-              selectedBusItinerary: itinerary,
-            },
-            syncStatus: 'PENDING_SYNC' as SyncStatus,
-          };
+      async (eventId: string, itinerary: BusRouteItinerary) => {
+        setSelectedBusItinerary(itinerary);
+        setEvents((prev) => {
+          const draft = prev.map((ev) => {
+            if (ev.id !== eventId || !ev.datePlan) return ev;
+            return {
+              ...ev,
+              datePlan: {
+                ...ev.datePlan,
+                transport: 'BUS_METRO' as TransportMode,
+                transportNote: itinerary.formattedTransportNote,
+                googleMapsUrl:
+                    ev.datePlan.googleMapsUrl || itinerary.googleMapsTransitUrl,
+                selectedBusItinerary: itinerary,
+              },
+              syncStatus: 'PENDING_SYNC' as SyncStatus,
+            };
+          });
+          const next = finalizeList('events', prev, draft);
+          storage.setItem(workspaceKeys.EVENTS, JSON.stringify(next)).catch(() => null);
+          void syncRoomSnapshotToCloud({ events: next });
+          return next;
         });
-        storage.setItem(workspaceKeys.EVENTS, JSON.stringify(next)).catch(() => null);
-        void syncRoomSnapshotToCloud({ events: next });
-        return next;
-      });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    },
-    [workspaceKeys.EVENTS, syncRoomSnapshotToCloud],
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      },
+      [workspaceKeys.EVENTS, syncRoomSnapshotToCloud, finalizeList],
   );
 
   const normalizeAiBody = useCallback((raw: string) => {
     let s = raw.toLowerCase();
     s = s.replace(
-      /[\u{1F300}-\u{1F9FF}]|[\u2600-\u27BF]|[\uFE00-\uFE0F]|\u200D/gu,
-      '',
+        /[\u{1F300}-\u{1F9FF}]|[\u2600-\u27BF]|[\uFE00-\uFE0F]|\u200D/gu,
+        '',
     );
     s = s.replace(
-      /[^\w\sàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/gi,
-      ' ',
+        /[^\w\sàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/gi,
+        ' ',
     );
     return s.replace(/\s+/g, ' ').trim();
   }, []);
 
   const isNearDuplicateAi = useCallback(
-    (eventId: string, candidate: string, previous?: string) => {
-      const norm = normalizeAiBody(candidate);
-      if (!norm || norm.length < 8) return true;
-      if (previous && normalizeAiBody(previous) === norm) return true;
-      const history = recentAiBodiesRef.current?.get(eventId) || [];
-      return history.some((h) => h === norm);
-    },
-    [normalizeAiBody],
+      (eventId: string, candidate: string, previous?: string) => {
+        const norm = normalizeAiBody(candidate);
+        if (!norm || norm.length < 8) return true;
+        if (previous && normalizeAiBody(previous) === norm) return true;
+        const history = recentAiBodiesRef.current?.get(eventId) || [];
+        return history.some((h) => h === norm);
+      },
+      [normalizeAiBody],
   );
 
   const rememberAiBody = useCallback(
-    (eventId: string, body: string) => {
-      const norm = normalizeAiBody(body);
-      if (!norm) return;
-      if (!recentAiBodiesRef.current) {
-        recentAiBodiesRef.current = new Map();
-      }
-      const prev = recentAiBodiesRef.current.get(eventId) || [];
-      const next = [norm, ...prev.filter((h) => h !== norm)].slice(0, 5);
-      recentAiBodiesRef.current.set(eventId, next);
-    },
-    [normalizeAiBody],
+      (eventId: string, body: string) => {
+        const norm = normalizeAiBody(body);
+        if (!norm) return;
+        if (!recentAiBodiesRef.current) {
+          recentAiBodiesRef.current = new Map();
+        }
+        const prev = recentAiBodiesRef.current.get(eventId) || [];
+        const next = [norm, ...prev.filter((h) => h !== norm)].slice(0, 5);
+        recentAiBodiesRef.current.set(eventId, next);
+      },
+      [normalizeAiBody],
   );
 
   const generateUniqueAiReminder = useCallback(
-    async (params: {
-      eventId: string;
-      title: string;
-      category: 'BIRTHDAY' | 'ANNIVERSARY';
-      daysUntilEvent: number;
-      partnerName: string;
-      tone?: AiToneStyle;
-      previousMessage?: string;
-    }) => {
-      const baseTone = params.tone || (params.category === 'BIRTHDAY' ? 'GIFT_HINT' : 'FUNNY');
-      const altTone: AiToneStyle = baseTone === 'FUNNY' ? 'GIFT_HINT' : 'FUNNY';
+      async (params: {
+        eventId: string;
+        title: string;
+        category: 'BIRTHDAY' | 'ANNIVERSARY';
+        daysUntilEvent: number;
+        partnerName: string;
+        tone?: AiToneStyle;
+        previousMessage?: string;
+      }) => {
+        const baseTone = params.tone || (params.category === 'BIRTHDAY' ? 'GIFT_HINT' : 'FUNNY');
+        const altTone: AiToneStyle = baseTone === 'FUNNY' ? 'GIFT_HINT' : 'FUNNY';
 
-      let message = await LocalNotificationService.generateAiFunnyReminder({
-        title: params.title,
-        category: params.category,
-        daysUntilEvent: params.daysUntilEvent,
-        partnerName: params.partnerName,
-        tone: baseTone,
-      });
-
-      if (isNearDuplicateAi(params.eventId, message, params.previousMessage)) {
-        const altDays = Math.max(
-          0,
-          params.daysUntilEvent + (params.daysUntilEvent % 2 === 0 ? 1 : -1),
-        );
-        message = await LocalNotificationService.generateAiFunnyReminder({
+        let message = await LocalNotificationService.generateAiFunnyReminder({
           title: params.title,
           category: params.category,
-          daysUntilEvent: altDays,
+          daysUntilEvent: params.daysUntilEvent,
           partnerName: params.partnerName,
-          tone: altTone,
+          tone: baseTone,
         });
-      }
 
-      if (isNearDuplicateAi(params.eventId, message, params.previousMessage)) {
-        const suffixPool = [
-          ' Nhớ chuẩn bị sớm nhé.',
-          ' Đừng để trôi mất ngày này.',
-          ' Một chút bất ngờ sẽ rất đáng.',
-        ];
-        const pick = suffixPool[Math.floor(Math.random() * suffixPool.length)];
-        if (!message.includes(pick.trim())) {
-          message = `${message.trim()} ${pick}`.trim();
+        if (isNearDuplicateAi(params.eventId, message, params.previousMessage)) {
+          const altDays = Math.max(
+              0,
+              params.daysUntilEvent + (params.daysUntilEvent % 2 === 0 ? 1 : -1),
+          );
+          message = await LocalNotificationService.generateAiFunnyReminder({
+            title: params.title,
+            category: params.category,
+            daysUntilEvent: altDays,
+            partnerName: params.partnerName,
+            tone: altTone,
+          });
         }
-      }
 
-      rememberAiBody(params.eventId, message);
-      return message;
-    },
-    [isNearDuplicateAi, rememberAiBody],
+        if (isNearDuplicateAi(params.eventId, message, params.previousMessage)) {
+          const suffixPool = [
+            ' Nhớ chuẩn bị sớm nhé.',
+            ' Đừng để trôi mất ngày này.',
+            ' Một chút bất ngờ sẽ rất đáng.',
+          ];
+          const pick = suffixPool[Math.floor(Math.random() * suffixPool.length)];
+          if (!message.includes(pick.trim())) {
+            message = `${message.trim()} ${pick}`.trim();
+          }
+        }
+
+        rememberAiBody(params.eventId, message);
+        return message;
+      },
+      [isNearDuplicateAi, rememberAiBody],
   );
 
   /**
    * Kéo toàn bộ dữ liệu phòng từ Cloud + PostgreSQL về thiết bị (khi mới cài lại app hoặc vào lại room)
    */
   const pullAndMergeCloudWorkspace = useCallback(
-    async (
-      localEvents: ImportantEvent[],
-      localGoals: CoupleGoalItem[],
-      localDailyQA: DailyQAItem | null,
-      localQaHistory: DailyQAItem[],
-    ) => {
-      if (!coupleId) return;
+      async (
+          localEvents: ImportantEvent[],
+          localGoals: CoupleGoalItem[],
+          localDailyQA: DailyQAItem | null,
+          localQaHistory: DailyQAItem[],
+      ) => {
+        if (!coupleId) return;
+        let needsPush = false;
+        let mergedEvents = eventsRef.current;
+        let mergedGoals = goalsRef.current;
+        await flushPendingRoomSnapshot(coupleId).catch(() => null);
+        const cloudSnapshot = await fetchFullCoupleRoomFromCloud(coupleId);
+        if (!cloudSnapshot) return;
 
-      await flushPendingRoomSnapshot(coupleId).catch(() => null);
-      const cloudSnapshot = await fetchFullCoupleRoomFromCloud(coupleId);
-      if (!cloudSnapshot) return;
-
-      // 1. Hợp nhất Events (Giữ lại các mục PENDING_SYNC ở local chưa lên server + toàn bộ mục trên Cloud)
-      if (Array.isArray(cloudSnapshot.events) && cloudSnapshot.events.length > 0) {
-        const cloudEventIds = new Set(cloudSnapshot.events.map((e) => e.id));
-        const unsyncedLocalEvents = localEvents.filter(
-          (loc) => loc.syncStatus === 'PENDING_SYNC' && !cloudEventIds.has(loc.id),
-        );
-        const mergedEvents: ImportantEvent[] = [
-          ...cloudSnapshot.events.map((e) => ({
-            ...e,
-            syncStatus: 'SYNCED' as SyncStatus,
-          })),
-          ...unsyncedLocalEvents,
-        ];
-        if (!sameJson(mergedEvents, eventsRef.current)) {
-          setEvents(mergedEvents);
-          await storage.setItem(workspaceKeys.EVENTS, JSON.stringify(mergedEvents));
-        }
-      } else if (localEvents.length > 0) {
-        // Nếu trên Cloud chưa có mà máy hiện tại đang có thì đẩy lên Cloud luôn
-        void pushCoupleRoomSnapshotToCloud({
-          coupleId,
-          events: localEvents,
-          goals: localGoals,
-          dailyQA: localDailyQA || rawDailyQARef.current,
-          qaHistory: localQaHistory,
-        });
-      }
-
-      // 2. Hợp nhất Goals & giao dịch MoMo
-      if (Array.isArray(cloudSnapshot.goals) && cloudSnapshot.goals.length > 0) {
-        const cloudGoalIds = new Set(cloudSnapshot.goals.map((g) => g.id));
-        const unsyncedLocalGoals = localGoals.filter(
-          (loc) => loc.syncStatus === 'PENDING_SYNC' && !cloudGoalIds.has(loc.id),
-        );
-        const mergedGoals: CoupleGoalItem[] = [
-          ...cloudSnapshot.goals.map((g) => ({
-            ...g,
-            syncStatus: 'SYNCED' as SyncStatus,
-          })),
-          ...unsyncedLocalGoals,
-        ];
-        if (!sameJson(mergedGoals, goalsRef.current)) {
-          setGoals(mergedGoals);
-          await storage.setItem(workspaceKeys.GOALS, JSON.stringify(mergedGoals));
-        }
-      }
-
-      // 3. Hợp nhất Daily QA hiện tại
-      if (cloudSnapshot.dailyQA && cloudSnapshot.dailyQA.questionId) {
-        const mergedAnswersMap: Record<string, DailyQAAnswerEntry> = {
-          ...(localDailyQA?.answersByUserId || {}),
-          ...(cloudSnapshot.dailyQA.answersByUserId || {}),
-        };
-        const mergedDailyQA: DailyQAItem = {
-          ...cloudSnapshot.dailyQA,
-          answersByUserId: mergedAnswersMap,
-        };
-        if (!sameJson(mergedDailyQA, rawDailyQARef.current)) {
-          setRawDailyQA(mergedDailyQA);
-          await storage.setItem(workspaceKeys.DAILY_QA, JSON.stringify(mergedDailyQA));
-        }
-      }
-
-      // 4. Hợp nhất Lịch sử Hỏi Đáp (QA History)
-      if (Array.isArray(cloudSnapshot.qaHistory) && cloudSnapshot.qaHistory.length > 0) {
-        const byQuestionId = new Map<string, DailyQAItem>();
-        for (const item of localQaHistory) {
-          byQuestionId.set(item.questionId, item);
-        }
-        for (const cloudItem of cloudSnapshot.qaHistory) {
-          const existing = byQuestionId.get(cloudItem.questionId);
-          byQuestionId.set(cloudItem.questionId, {
-            ...existing,
-            ...cloudItem,
-            answersByUserId: {
-              ...(existing?.answersByUserId || {}),
-              ...(cloudItem.answersByUserId || {}),
-            },
-          });
-        }
-        const mergedHistory = Array.from(byQuestionId.values());
-        if (!sameJson(mergedHistory, qaHistoryRef.current)) {
-          setQaHistory(mergedHistory);
-          await storage.setItem(workspaceKeys.QA_HISTORY, JSON.stringify(mergedHistory));
-        }
-      }
-
-      // 5. Hợp nhất Album Media & Locket Snaps từ Cloud
-      try {
-        const mediaWorkspace = await fetchCloudWorkspaceMedia(150).catch(() => null);
-        const rawCloudAlbums =
-          mediaWorkspace?.albumMedia || cloudSnapshot.albumMedia || [];
-        const rawCloudLockets =
-          mediaWorkspace?.locketSnaps || cloudSnapshot.locketSnaps || [];
-
-        // Lọc bỏ các bản ghi Avatar / Hero Wallpaper / thumbnail cũ từng bị lưu nhầm vào ALBUM_MEDIA trước đây
-        const cleanCloudAlbums = rawCloudAlbums.filter(
-          (m) =>
-            m.caption !== 'Hero Wallpaper' &&
-            m.caption !== 'Avatar' &&
-            m.caption !== 'thumbnail',
-        );
-
-        if (Array.isArray(cleanCloudAlbums)) {
-          const cloudMediaIds = new Set(cleanCloudAlbums.map((m) => m.id));
-          const unsyncedLocalMedia = mediaListRef.current.filter(
-            (loc) => loc.syncStatus === 'PENDING_SYNC' && !cloudMediaIds.has(loc.id),
+        // 1. Events (so theo từng mục, dùng bản mới nhất trong ref thay cho tham số đã cũ)
+        {
+          const r = mergeWithCloud<ImportantEvent>(
+              eventsRef.current,
+              (cloudSnapshot.events ?? []) as ImportantEvent[],
+              tombsRef.current.events,
           );
+          tombsRef.current.events = r.tombs;
+          const keptIds = new Set(r.items.map((e) => e.id));
+          eventsRef.current
+              .filter((e) => !keptIds.has(e.id))
+              .forEach((e) => void LocalNotificationService.cancelReminder(e.id));
+          if (r.changed) {
+            mergedEvents = r.items;
+            setEvents(r.items);
+            await storage.setItem(workspaceKeys.EVENTS, JSON.stringify(r.items));
+            persistTombs();
+          }
+          if (r.toPush.length > 0 || r.tombsToPush) needsPush = true;
+        }
 
-          const mappedCloudMedia: CoupleMediaItem[] = cleanCloudAlbums.map((m) => ({
-            id: m.id,
-            uri: m.remoteUrl,
-            remoteUrl: m.remoteUrl,
-            thumbnailUri: m.thumbnailUrl ?? null,
-            mediaType: m.mediaType,
-            caption: m.caption || 'Kỷ niệm chung',
-            durationSec: m.durationSec ?? 0,
-            uploaderId: m.uploaderId,
-            createdAt:
-              (m.createdAt || '').split('T')[0] ||
-              new Date().toISOString().split('T')[0],
-            syncStatus: 'SYNCED' as SyncStatus,
-          }));
+        // 2. Goals (so theo từng mục, kể cả giao dịch MoMo nằm trong mục)
+        {
+          const r = mergeWithCloud<CoupleGoalItem>(
+              goalsRef.current,
+              (cloudSnapshot.goals ?? []) as CoupleGoalItem[],
+              tombsRef.current.goals,
+          );
+          tombsRef.current.goals = r.tombs;
+          const keptIds = new Set(r.items.map((g) => g.id));
+          goalsRef.current
+              .filter((g) => !keptIds.has(g.id))
+              .forEach((g) => void LocalNotificationService.cancelReminder(g.id));
+          if (r.changed) {
+            mergedGoals = r.items;
+            setGoals(r.items);
+            await storage.setItem(workspaceKeys.GOALS, JSON.stringify(r.items));
+            persistTombs();
+          }
+          if (r.toPush.length > 0 || r.tombsToPush) needsPush = true;
+        }
 
-          const mergedMedia = [...unsyncedLocalMedia, ...mappedCloudMedia];
-          if (!sameJson(mergedMedia, mediaListRef.current)) {
-            setMediaList(mergedMedia);
-            await storage.setItem(workspaceKeys.MEDIA, JSON.stringify(mergedMedia));
+        if (needsPush) {
+          void syncRoomSnapshotToCloud({ events: mergedEvents, goals: mergedGoals });
+        }
+
+        // 3. Hợp nhất Daily QA hiện tại
+        if (cloudSnapshot.dailyQA && cloudSnapshot.dailyQA.questionId) {
+          const mergedAnswersMap: Record<string, DailyQAAnswerEntry> = {
+            ...(localDailyQA?.answersByUserId || {}),
+            ...(cloudSnapshot.dailyQA.answersByUserId || {}),
+          };
+          const mergedDailyQA: DailyQAItem = {
+            ...cloudSnapshot.dailyQA,
+            answersByUserId: mergedAnswersMap,
+          };
+          if (!sameJson(mergedDailyQA, rawDailyQARef.current)) {
+            setRawDailyQA(mergedDailyQA);
+            await storage.setItem(workspaceKeys.DAILY_QA, JSON.stringify(mergedDailyQA));
           }
         }
 
-        if (Array.isArray(rawCloudLockets)) {
-          const cloudLocketIds = new Set(rawCloudLockets.map((s) => s.id));
-          const unsyncedLocalLockets = locketSnapsRef.current.filter(
-            (loc) => loc.id.startsWith('locket_') && !loc.remoteUrl && !cloudLocketIds.has(loc.id),
-          );
-
-          const mappedCloudLockets: LocketSnapItem[] = rawCloudLockets.map((s) => {
-            const isMineSnap = String(s.uploaderId) === String(currentUserId);
-            const dt = s.createdAt ? new Date(s.createdAt) : new Date();
-            const timeStr = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')} • ${dt.toISOString().split('T')[0]}`;
-            return {
-              id: s.id,
-              uri: s.remoteUrl,
-              remoteUrl: s.remoteUrl,
-              ownerId: s.uploaderId,
-              senderId: s.uploaderId,
-              senderName: isMineSnap ? myProfile.nickname : partnerProfile.nickname,
-              isMine: isMineSnap,
-              stampBadge: s.stamp || '💕 Đang nhớ đằng ấy',
-              caption: s.caption || 'Khoảnh khắc Locket',
-              createdAtTime: timeStr,
-              reactions: Array.isArray(s.reactions)
-                ? s.reactions.map((r: any) => (typeof r === 'string' ? r : r.emoji || '❤️'))
-                : ['❤️'],
-            };
-          });
-
-          const mergedLockets = [...unsyncedLocalLockets, ...mappedCloudLockets];
-          if (!sameJson(mergedLockets, locketSnapsRef.current)) {
-            setLocketSnaps(mergedLockets);
-            await storage.setItem(workspaceKeys.LOCKET, JSON.stringify(mergedLockets));
+        // 4. Hợp nhất Lịch sử Hỏi Đáp (QA History)
+        if (Array.isArray(cloudSnapshot.qaHistory) && cloudSnapshot.qaHistory.length > 0) {
+          const byQuestionId = new Map<string, DailyQAItem>();
+          for (const item of localQaHistory) {
+            byQuestionId.set(item.questionId, item);
+          }
+          for (const cloudItem of cloudSnapshot.qaHistory) {
+            const existing = byQuestionId.get(cloudItem.questionId);
+            byQuestionId.set(cloudItem.questionId, {
+              ...existing,
+              ...cloudItem,
+              answersByUserId: {
+                ...(existing?.answersByUserId || {}),
+                ...(cloudItem.answersByUserId || {}),
+              },
+            });
+          }
+          const mergedHistory = Array.from(byQuestionId.values());
+          if (!sameJson(mergedHistory, qaHistoryRef.current)) {
+            setQaHistory(mergedHistory);
+            await storage.setItem(workspaceKeys.QA_HISTORY, JSON.stringify(mergedHistory));
           }
         }
-      } catch {
-        // Bỏ qua nếu offline, giữ nguyên cache local
-      }
-    },
-    [
-      coupleId,
-      workspaceKeys,
-      currentUserId,
-      myProfile.nickname,
-      partnerProfile.nickname,
-    ],
+
+        // 5. Hợp nhất Album Media & Locket Snaps từ Cloud
+        try {
+          const mediaWorkspace = await fetchCloudWorkspaceMedia(150).catch(() => null);
+          const rawCloudAlbums =
+              mediaWorkspace?.albumMedia || cloudSnapshot.albumMedia || [];
+          const rawCloudLockets =
+              mediaWorkspace?.locketSnaps || cloudSnapshot.locketSnaps || [];
+
+          // Lọc bỏ các bản ghi Avatar / Hero Wallpaper / thumbnail cũ từng bị lưu nhầm vào ALBUM_MEDIA trước đây
+          const cleanCloudAlbums = rawCloudAlbums.filter(
+              (m) =>
+                  m.caption !== 'Hero Wallpaper' &&
+                  m.caption !== 'Avatar' &&
+                  m.caption !== 'thumbnail',
+          );
+
+          if (Array.isArray(cleanCloudAlbums)) {
+            const cloudMediaIds = new Set(cleanCloudAlbums.map((m) => m.id));
+            const unsyncedLocalMedia = mediaListRef.current.filter(
+                (loc) => loc.syncStatus === 'PENDING_SYNC' && !cloudMediaIds.has(loc.id),
+            );
+
+            const mappedCloudMedia: CoupleMediaItem[] = cleanCloudAlbums.map((m) => ({
+              id: m.id,
+              uri: m.remoteUrl,
+              remoteUrl: m.remoteUrl,
+              thumbnailUri: m.thumbnailUrl ?? null,
+              mediaType: m.mediaType,
+              caption: m.caption || 'Kỷ niệm chung',
+              durationSec: m.durationSec ?? 0,
+              uploaderId: m.uploaderId,
+              createdAt:
+                  (m.createdAt || '').split('T')[0] ||
+                  new Date().toISOString().split('T')[0],
+              syncStatus: 'SYNCED' as SyncStatus,
+            }));
+
+            const mergedMedia = [...unsyncedLocalMedia, ...mappedCloudMedia];
+            if (!sameJson(mergedMedia, mediaListRef.current)) {
+              setMediaList(mergedMedia);
+              await storage.setItem(workspaceKeys.MEDIA, JSON.stringify(mergedMedia));
+            }
+          }
+
+          if (Array.isArray(rawCloudLockets)) {
+            const cloudLocketIds = new Set(rawCloudLockets.map((s) => s.id));
+            const unsyncedLocalLockets = locketSnapsRef.current.filter(
+                (loc) => loc.id.startsWith('locket_') && !loc.remoteUrl && !cloudLocketIds.has(loc.id),
+            );
+
+            const mappedCloudLockets: LocketSnapItem[] = rawCloudLockets.map((s) => {
+              const isMineSnap = String(s.uploaderId) === String(currentUserId);
+              const dt = s.createdAt ? new Date(s.createdAt) : new Date();
+              const timeStr = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')} • ${dt.toISOString().split('T')[0]}`;
+              return {
+                id: s.id,
+                uri: s.remoteUrl,
+                remoteUrl: s.remoteUrl,
+                ownerId: s.uploaderId,
+                senderId: s.uploaderId,
+                senderName: isMineSnap ? myProfile.nickname : partnerProfile.nickname,
+                isMine: isMineSnap,
+                stampBadge: s.stamp || '💕 Đang nhớ đằng ấy',
+                caption: s.caption || 'Khoảnh khắc Locket',
+                createdAtTime: timeStr,
+                reactions: Array.isArray(s.reactions)
+                    ? s.reactions.map((r: any) => (typeof r === 'string' ? r : r.emoji || '❤️'))
+                    : ['❤️'],
+              };
+            });
+
+            const mergedLockets = [...unsyncedLocalLockets, ...mappedCloudLockets];
+            if (!sameJson(mergedLockets, locketSnapsRef.current)) {
+              setLocketSnaps(mergedLockets);
+              await storage.setItem(workspaceKeys.LOCKET, JSON.stringify(mergedLockets));
+            }
+          }
+        } catch {
+          // Bỏ qua nếu offline, giữ nguyên cache local
+        }
+      },
+      [
+        coupleId,
+        workspaceKeys,
+        currentUserId,
+        myProfile.nickname,
+        partnerProfile.nickname,
+        syncRoomSnapshotToCloud,
+        persistTombs,
+      ],
   );
 
   // Khởi tạo dữ liệu từ bộ nhớ máy trước (Offline-first), sau đó tự động tải từ Cloud Database về
@@ -1663,16 +1695,23 @@ export function useCoupleWorkspace() {
     setIsLoaded(false);
 
     const loadWorkspace = async () => {
-      const [rawEvents, rawGoals, rawMedia, rawLocket, rawQA, rawHistory] = await Promise.all([
-        storage.getItem(workspaceKeys.EVENTS),
-        storage.getItem(workspaceKeys.GOALS),
-        storage.getItem(workspaceKeys.MEDIA),
-        storage.getItem(workspaceKeys.LOCKET),
-        storage.getItem(workspaceKeys.DAILY_QA),
-        storage.getItem(workspaceKeys.QA_HISTORY),
-      ]);
+      const [rawEvents, rawGoals, rawMedia, rawLocket, rawQA, rawHistory, rawTombs] =
+          await Promise.all([
+            storage.getItem(workspaceKeys.EVENTS),
+            storage.getItem(workspaceKeys.GOALS),
+            storage.getItem(workspaceKeys.MEDIA),
+            storage.getItem(workspaceKeys.LOCKET),
+            storage.getItem(workspaceKeys.DAILY_QA),
+            storage.getItem(workspaceKeys.QA_HISTORY),
+            storage.getItem(tombsKey),
+          ]);
       if (!mounted) return;
-
+      try {
+        const t = rawTombs ? JSON.parse(rawTombs) : {};
+        tombsRef.current = { events: t.events ?? {}, goals: t.goals ?? {} };
+      } catch {
+        tombsRef.current = { events: {}, goals: {} };
+      }
       const parsedEvents: ImportantEvent[] = rawEvents ? JSON.parse(rawEvents) : [];
       const parsedGoals: CoupleGoalItem[] = rawGoals ? JSON.parse(rawGoals) : [];
       const parsedMedia: CoupleMediaItem[] = rawMedia ? JSON.parse(rawMedia) : [];
@@ -1703,10 +1742,10 @@ export function useCoupleWorkspace() {
       // Khi vào đúng room (coupleId), tự động kéo toàn bộ dữ liệu từ PostgreSQL về khôi phục
       if (coupleId) {
         await pullAndMergeCloudWorkspace(
-          parsedEvents,
-          parsedGoals,
-          parsedQA,
-          parsedHistory,
+            parsedEvents,
+            parsedGoals,
+            parsedQA,
+            parsedHistory,
         );
       }
     };
@@ -1715,7 +1754,7 @@ export function useCoupleWorkspace() {
     return () => {
       mounted = false;
     };
-  }, [workspaceKeys, coupleId, normalizeAiBody, pullAndMergeCloudWorkspace]);
+  }, [workspaceKeys, tombsKey, coupleId, normalizeAiBody, pullAndMergeCloudWorkspace]);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -1745,8 +1784,8 @@ export function useCoupleWorkspace() {
             syncStatus: 'SYNCED',
           });
         } else if (
-          nextList[idx].eventDate !== myProfile.birthDate ||
-          nextList[idx].title !== `Sinh nhật của ${myProfile.nickname}`
+            nextList[idx].eventDate !== myProfile.birthDate ||
+            nextList[idx].title !== `Sinh nhật của ${myProfile.nickname}`
         ) {
           changed = true;
           nextList[idx] = {
@@ -1780,8 +1819,8 @@ export function useCoupleWorkspace() {
             syncStatus: 'SYNCED',
           });
         } else if (
-          nextList[idx].eventDate !== partnerProfile.birthDate ||
-          nextList[idx].title !== `Sinh nhật của ${partnerProfile.nickname}`
+            nextList[idx].eventDate !== partnerProfile.birthDate ||
+            nextList[idx].title !== `Sinh nhật của ${partnerProfile.nickname}`
         ) {
           changed = true;
           nextList[idx] = {
@@ -1818,10 +1857,10 @@ export function useCoupleWorkspace() {
     const todayIso = new Date().toISOString().split('T')[0];
     const snapshot = eventsRef.current;
     const staleEvents = snapshot.filter(
-      (ev) =>
-        ev.category !== 'DATE_PLAN' &&
-        ev.autoDailyAi !== false &&
-        ev.lastAiGeneratedDate !== todayIso,
+        (ev) =>
+            ev.category !== 'DATE_PLAN' &&
+            ev.autoDailyAi !== false &&
+            ev.lastAiGeneratedDate !== todayIso,
     );
 
     if (staleEvents.length === 0) return;
@@ -1845,17 +1884,17 @@ export function useCoupleWorkspace() {
         await LocalNotificationService.cancelReminder(ev.id).catch(() => null);
 
         const notifId = await safeNotif(
-          () =>
-            LocalNotificationService.scheduleCustomReminder({
-              sourceId: ev.id,
-              category: ev.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
-              title: `${ev.category === 'BIRTHDAY' ? '🎂 Sinh nhật' : '💍 Kỷ niệm'}: ${ev.title}`,
-              body: freshAiMessage,
-              eventDateIso: ev.eventDate,
-              daysBefore: ev.notifyDaysBefore,
-              timeHm: ev.notifyAtTime,
-            }),
-          null as string | null,
+            () =>
+                LocalNotificationService.scheduleCustomReminder({
+                  sourceId: ev.id,
+                  category: ev.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
+                  title: `${ev.category === 'BIRTHDAY' ? '🎂 Sinh nhật' : '💍 Kỷ niệm'}: ${ev.title}`,
+                  body: freshAiMessage,
+                  eventDateIso: ev.eventDate,
+                  daysBefore: ev.notifyDaysBefore,
+                  timeHm: ev.notifyAtTime,
+                }),
+            null as string | null,
         );
 
         updatedMap.set(ev.id, { msg: freshAiMessage, notifId });
@@ -1913,10 +1952,10 @@ export function useCoupleWorkspace() {
       cloudPullBusyRef.current = true;
       try {
         await pullAndMergeCloudWorkspace(
-          eventsRef.current,
-          goalsRef.current,
-          rawDailyQARef.current,
-          qaHistoryRef.current,
+            eventsRef.current,
+            goalsRef.current,
+            rawDailyQARef.current,
+            qaHistoryRef.current,
         );
       } catch {
         // Lượt poll kế tiếp sẽ thử lại
@@ -1953,875 +1992,880 @@ export function useCoupleWorkspace() {
   }, [isLoaded, coupleId, pullAndMergeCloudWorkspace]);
 
   const captureCoupleLocket = useCallback(
-    async (source: 'CAMERA' | 'GALLERY', stampBadge: string, captionText: string) => {
-      if (source === 'CAMERA') {
-        const camPerm = await ImagePicker.requestCameraPermissionsAsync();
-        if (!camPerm.granted) {
-          Alert.alert(
-            'Cần quyền truy cập Máy ảnh',
-            'Hãy cấp quyền Máy ảnh trong Cài đặt để chụp khoảnh khắc Locket gửi cho người yêu.',
-            [
-              { text: 'Đóng', style: 'cancel' },
-              { text: 'Mở Cài đặt', onPress: () => Linking.openSettings() },
-            ],
-          );
-          return false;
+      async (source: 'CAMERA' | 'GALLERY', stampBadge: string, captionText: string) => {
+        if (source === 'CAMERA') {
+          const camPerm = await ImagePicker.requestCameraPermissionsAsync();
+          if (!camPerm.granted) {
+            Alert.alert(
+                'Cần quyền truy cập Máy ảnh',
+                'Hãy cấp quyền Máy ảnh trong Cài đặt để chụp khoảnh khắc Locket gửi cho người yêu.',
+                [
+                  { text: 'Đóng', style: 'cancel' },
+                  { text: 'Mở Cài đặt', onPress: () => Linking.openSettings() },
+                ],
+            );
+            return false;
+          }
+        } else {
+          const libPerm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (!libPerm.granted) {
+            Alert.alert(
+                'Cần quyền Thư viện ảnh',
+                'Hãy cấp quyền Thư viện ảnh trong Cài đặt để chia sẻ ảnh Locket.',
+                [
+                  { text: 'Đóng', style: 'cancel' },
+                  { text: 'Mở Cài đặt', onPress: () => Linking.openSettings() },
+                ],
+            );
+            return false;
+          }
         }
-      } else {
-        const libPerm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!libPerm.granted) {
-          Alert.alert(
-            'Cần quyền Thư viện ảnh',
-            'Hãy cấp quyền Thư viện ảnh trong Cài đặt để chia sẻ ảnh Locket.',
-            [
-              { text: 'Đóng', style: 'cancel' },
-              { text: 'Mở Cài đặt', onPress: () => Linking.openSettings() },
-            ],
-          );
-          return false;
-        }
-      }
 
-      const pickerOptions: ImagePicker.ImagePickerOptions = {
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: socialPrefs.hdMediaUpload ? 0.92 : 0.7,
-      };
+        const pickerOptions: ImagePicker.ImagePickerOptions = {
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: socialPrefs.hdMediaUpload ? 0.92 : 0.7,
+        };
 
-      const result =
-        source === 'CAMERA'
-          ? await ImagePicker.launchCameraAsync(pickerOptions)
-          : await ImagePicker.launchImageLibraryAsync(pickerOptions);
+        const result =
+            source === 'CAMERA'
+                ? await ImagePicker.launchCameraAsync(pickerOptions)
+                : await ImagePicker.launchImageLibraryAsync(pickerOptions);
 
-      if (result.canceled || !result.assets?.[0]) return false;
+        if (result.canceled || !result.assets?.[0]) return false;
 
-      const localUri = result.assets[0].uri;
-      const now = new Date();
-      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} • ${now.toISOString().split('T')[0]}`;
-      const finalStamp = stampBadge || '💕 Đang nhớ đằng ấy';
-      const finalCaption = captionText.trim() || 'Gửi một chút đáng yêu ngay lúc này!';
-      const tempId = `locket_${Date.now()}`;
+        const localUri = result.assets[0].uri;
+        const now = new Date();
+        const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} • ${now.toISOString().split('T')[0]}`;
+        const finalStamp = stampBadge || '💕 Đang nhớ đằng ấy';
+        const finalCaption = captionText.trim() || 'Gửi một chút đáng yêu ngay lúc này!';
+        const tempId = `locket_${Date.now()}`;
 
-      const newSnap: LocketSnapItem = {
-        id: tempId,
-        uri: localUri,
-        remoteUrl: null,
-        ownerId: currentUserId,
-        senderId: currentUserId,
-        senderName: myProfile.nickname,
-        isMine: true,
-        stampBadge: finalStamp,
-        caption: finalCaption,
-        createdAtTime: timeStr,
-        reactions: ['❤️'],
-      };
-
-      setLocketSnaps((prev) => {
-        const next = [newSnap, ...prev];
-        storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
-        return next;
-      });
-
-      // KHÓA POLLING TRONG LÚC ĐẨY LÊN S3 & POSTGRESQL
-      cloudPushInFlightRef.current += 1;
-      try {
-        const savedCloud = await uploadMediaToCloudAndSaveDb({
-          localUri,
-          category: 'LOCKET_SNAP',
-          mediaType: 'IMAGE',
-          stamp: finalStamp,
+        const newSnap: LocketSnapItem = {
+          id: tempId,
+          uri: localUri,
+          remoteUrl: null,
+          ownerId: currentUserId,
+          senderId: currentUserId,
+          senderName: myProfile.nickname,
+          isMine: true,
+          stampBadge: finalStamp,
           caption: finalCaption,
-          idempotencyKey: tempId,
-        });
+          createdAtTime: timeStr,
+          reactions: ['❤️'],
+        };
 
         setLocketSnaps((prev) => {
-          const next = prev.map((s) =>
-            s.id === tempId
-              ? {
-                  ...s,
-                  id: savedCloud.id, // Đổi từ tempId sang UUID thật của PostgreSQL
-                  uri: savedCloud.remoteUrl,
-                  remoteUrl: savedCloud.remoteUrl,
-                }
-              : s,
-          );
+          const next = [newSnap, ...prev];
           storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
           return next;
         });
-      } catch (err) {
-        console.error('Lỗi lưu Locket vào Database:', err);
-        Alert.alert('Chưa lưu được lên Server', 'Ảnh Locket chưa đẩy được vào Database, vui lòng kiểm tra kết nối mạng.');
-      } finally {
-        cloudPushInFlightRef.current -= 1;
-      }
 
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      return true;
-    },
-    [currentUserId, myProfile.nickname, socialPrefs.hdMediaUpload, workspaceKeys.LOCKET],
+        // KHÓA POLLING TRONG LÚC ĐẨY LÊN S3 & POSTGRESQL
+        cloudPushInFlightRef.current += 1;
+        try {
+          const savedCloud = await uploadMediaToCloudAndSaveDb({
+            localUri,
+            category: 'LOCKET_SNAP',
+            mediaType: 'IMAGE',
+            stamp: finalStamp,
+            caption: finalCaption,
+            idempotencyKey: tempId,
+          });
+
+          setLocketSnaps((prev) => {
+            const next = prev.map((s) =>
+                s.id === tempId
+                    ? {
+                      ...s,
+                      id: savedCloud.id, // Đổi từ tempId sang UUID thật của PostgreSQL
+                      uri: savedCloud.remoteUrl,
+                      remoteUrl: savedCloud.remoteUrl,
+                    }
+                    : s,
+            );
+            storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
+            return next;
+          });
+        } catch (err) {
+          console.error('Lỗi lưu Locket vào Database:', err);
+          Alert.alert('Chưa lưu được lên Server', 'Ảnh Locket chưa đẩy được vào Database, vui lòng kiểm tra kết nối mạng.');
+        } finally {
+          cloudPushInFlightRef.current -= 1;
+        }
+
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        return true;
+      },
+      [currentUserId, myProfile.nickname, socialPrefs.hdMediaUpload, workspaceKeys.LOCKET],
   );
 
   const recordGoalMomoTransaction = useCallback(
-    async (
-      goalId: string,
-      txType: 'IN' | 'OUT',
-      rawAmount: number,
-      noteText?: string,
-    ) => {
-      const amount = Math.max(0, Math.round(rawAmount));
-      if (amount <= 0) return;
+      async (
+          goalId: string,
+          txType: 'IN' | 'OUT',
+          rawAmount: number,
+          noteText?: string,
+      ) => {
+        const amount = Math.max(0, Math.round(rawAmount));
+        if (amount <= 0) return;
 
-      const now = new Date();
-      const timeLabel = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} • ${now.toISOString().split('T')[0]}`;
+        const now = new Date();
+        const timeLabel = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} • ${now.toISOString().split('T')[0]}`;
 
-      const newTx: MomoGoalTransaction = {
-        id: `tx_${Date.now()}`,
-        type: txType,
-        amount,
-        actorId: currentUserId,
-        actor: myProfile.nickname,
-        note: noteText?.trim() || (txType === 'IN' ? 'Chuyển vào quỹ MoMo' : 'Rút chi tiêu từ quỹ'),
-        createdAt: timeLabel,
-      };
+        const newTx: MomoGoalTransaction = {
+          id: `tx_${Date.now()}`,
+          type: txType,
+          amount,
+          actorId: currentUserId,
+          actor: myProfile.nickname,
+          note: noteText?.trim() || (txType === 'IN' ? 'Chuyển vào quỹ MoMo' : 'Rút chi tiêu từ quỹ'),
+          createdAt: timeLabel,
+        };
 
-      setGoals((prev) => {
-        const next = prev.map((g) => {
-          if (g.id !== goalId) return g;
+        setGoals((prev) => {
+          const draft = prev.map((g) => {
+            if (g.id !== goalId) return g;
 
-          const updatedCurrent =
-            txType === 'IN'
-              ? g.currentAmount + amount
-              : Math.max(0, g.currentAmount - amount);
+            const updatedCurrent =
+                txType === 'IN'
+                    ? g.currentAmount + amount
+                    : Math.max(0, g.currentAmount - amount);
 
-          const reachedTarget = g.targetAmount > 0 && updatedCurrent >= g.targetAmount;
-          if (reachedTarget && !g.isCompleted) {
-            void LocalNotificationService.cancelReminder(g.id);
-          }
+            const reachedTarget = g.targetAmount > 0 && updatedCurrent >= g.targetAmount;
+            if (reachedTarget && !g.isCompleted) {
+              void LocalNotificationService.cancelReminder(g.id);
+            }
 
-          return {
-            ...g,
-            currentAmount: updatedCurrent,
-            isCompleted: reachedTarget,
-            momoTransactions: [newTx, ...(g.momoTransactions || []).slice(0, 29)],
-          };
+            return {
+              ...g,
+              currentAmount: updatedCurrent,
+              isCompleted: reachedTarget,
+              momoTransactions: [newTx, ...(g.momoTransactions || []).slice(0, 29)],
+            };
+          });
+
+          const next = finalizeList('goals', prev, draft);
+          storage.setItem(workspaceKeys.GOALS, JSON.stringify(next)).catch(() => null);
+          void syncRoomSnapshotToCloud({ goals: next });
+          return next;
         });
 
-        storage.setItem(workspaceKeys.GOALS, JSON.stringify(next)).catch(() => null);
-        void syncRoomSnapshotToCloud({ goals: next });
-        return next;
-      });
+        api
+            .post(`/api/v1/couples/goals/${goalId}/momo-transactions`, newTx)
+            .catch(() => null);
 
-      api
-        .post(`/api/v1/couples/goals/${goalId}/momo-transactions`, newTx)
-        .catch(() => null);
-
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    },
-    [currentUserId, myProfile.nickname, workspaceKeys.GOALS, syncRoomSnapshotToCloud],
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      },
+      [currentUserId, myProfile.nickname, workspaceKeys.GOALS, syncRoomSnapshotToCloud, finalizeList],
   );
 
   const restoreWorkspaceBackup = useCallback(
-    async (backupPayload: {
-      events?: ImportantEvent[];
-      goals?: CoupleGoalItem[];
-      locketSnaps?: LocketSnapItem[];
-      mediaList?: CoupleMediaItem[];
-      dailyQA?: DailyQAItem;
-      qaHistory?: DailyQAItem[];
-    }) => {
-      if (Array.isArray(backupPayload.events)) {
-        setEvents(backupPayload.events);
-        await storage.setItem(workspaceKeys.EVENTS, JSON.stringify(backupPayload.events));
-      }
-      if (Array.isArray(backupPayload.goals)) {
-        setGoals(backupPayload.goals);
-        await storage.setItem(workspaceKeys.GOALS, JSON.stringify(backupPayload.goals));
-      }
-      if (Array.isArray(backupPayload.locketSnaps)) {
-        setLocketSnaps(backupPayload.locketSnaps);
-        await storage.setItem(workspaceKeys.LOCKET, JSON.stringify(backupPayload.locketSnaps));
-      }
-      if (Array.isArray(backupPayload.mediaList)) {
-        setMediaList(backupPayload.mediaList);
-        await storage.setItem(workspaceKeys.MEDIA, JSON.stringify(backupPayload.mediaList));
-      }
-      if (backupPayload.dailyQA) {
-        setRawDailyQA(backupPayload.dailyQA);
-        await storage.setItem(workspaceKeys.DAILY_QA, JSON.stringify(backupPayload.dailyQA));
-      }
-      if (Array.isArray(backupPayload.qaHistory)) {
-        setQaHistory(backupPayload.qaHistory);
-        await storage.setItem(workspaceKeys.QA_HISTORY, JSON.stringify(backupPayload.qaHistory));
-      }
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    },
-    [workspaceKeys],
+      async (backupPayload: {
+        events?: ImportantEvent[];
+        goals?: CoupleGoalItem[];
+        locketSnaps?: LocketSnapItem[];
+        mediaList?: CoupleMediaItem[];
+        dailyQA?: DailyQAItem;
+        qaHistory?: DailyQAItem[];
+      }) => {
+        if (Array.isArray(backupPayload.events)) {
+          setEvents(backupPayload.events);
+          await storage.setItem(workspaceKeys.EVENTS, JSON.stringify(backupPayload.events));
+        }
+        if (Array.isArray(backupPayload.goals)) {
+          setGoals(backupPayload.goals);
+          await storage.setItem(workspaceKeys.GOALS, JSON.stringify(backupPayload.goals));
+        }
+        if (Array.isArray(backupPayload.locketSnaps)) {
+          setLocketSnaps(backupPayload.locketSnaps);
+          await storage.setItem(workspaceKeys.LOCKET, JSON.stringify(backupPayload.locketSnaps));
+        }
+        if (Array.isArray(backupPayload.mediaList)) {
+          setMediaList(backupPayload.mediaList);
+          await storage.setItem(workspaceKeys.MEDIA, JSON.stringify(backupPayload.mediaList));
+        }
+        if (backupPayload.dailyQA) {
+          setRawDailyQA(backupPayload.dailyQA);
+          await storage.setItem(workspaceKeys.DAILY_QA, JSON.stringify(backupPayload.dailyQA));
+        }
+        if (Array.isArray(backupPayload.qaHistory)) {
+          setQaHistory(backupPayload.qaHistory);
+          await storage.setItem(workspaceKeys.QA_HISTORY, JSON.stringify(backupPayload.qaHistory));
+        }
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      },
+      [workspaceKeys],
   );
 
   const saveCapturedLocketUri = useCallback(
-    async (uri: string, stampBadge: string, captionText: string) => {
-      const now = new Date();
-      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} • ${now.toISOString().split('T')[0]}`;
-      const tempId = `locket_${Date.now()}`;
-      const finalStamp = stampBadge || '💕 Đang nhớ đằng ấy';
-      const finalCaption = captionText.trim() || 'Khoảnh khắc vừa chụp';
+      async (uri: string, stampBadge: string, captionText: string) => {
+        const now = new Date();
+        const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} • ${now.toISOString().split('T')[0]}`;
+        const tempId = `locket_${Date.now()}`;
+        const finalStamp = stampBadge || '💕 Đang nhớ đằng ấy';
+        const finalCaption = captionText.trim() || 'Khoảnh khắc vừa chụp';
 
-      const newSnap: LocketSnapItem = {
-        id: tempId,
-        uri,
-        remoteUrl: null,
-        ownerId: currentUserId,
-        senderId: currentUserId,
-        senderName: myProfile.nickname,
-        isMine: true,
-        stampBadge: finalStamp,
-        caption: finalCaption,
-        createdAtTime: timeStr,
-        reactions: ['❤️'],
-      };
-
-      setLocketSnaps((prev) => {
-        const next = [newSnap, ...prev];
-        storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
-        return next;
-      });
-
-      // ĐỢI LƯU VÀO DATABASE XONG MỚI TRẢ VỀ KẾT QUẢ
-      cloudPushInFlightRef.current += 1;
-      try {
-        const savedCloud = await uploadMediaToCloudAndSaveDb({
-          localUri: uri,
-          category: 'LOCKET_SNAP',
-          mediaType: 'IMAGE',
-          stamp: finalStamp,
+        const newSnap: LocketSnapItem = {
+          id: tempId,
+          uri,
+          remoteUrl: null,
+          ownerId: currentUserId,
+          senderId: currentUserId,
+          senderName: myProfile.nickname,
+          isMine: true,
+          stampBadge: finalStamp,
           caption: finalCaption,
-          idempotencyKey: tempId,
-        });
+          createdAtTime: timeStr,
+          reactions: ['❤️'],
+        };
 
         setLocketSnaps((prev) => {
-          const next = prev.map((s) =>
-            s.id === tempId
-              ? {
-                  ...s,
-                  id: savedCloud.id,
-                  uri: savedCloud.remoteUrl,
-                  remoteUrl: savedCloud.remoteUrl,
-                }
-              : s,
-          );
+          const next = [newSnap, ...prev];
           storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
           return next;
         });
-      } catch (err) {
-        console.error('Lỗi lưu Locket vào Database:', err);
-        Alert.alert('Chưa lưu được lên Server', 'Không thể lưu ảnh Locket vào Database.');
-      } finally {
-        cloudPushInFlightRef.current -= 1;
-      }
 
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    },
-    [currentUserId, myProfile.nickname, workspaceKeys.LOCKET],
+        // ĐỢI LƯU VÀO DATABASE XONG MỚI TRẢ VỀ KẾT QUẢ
+        cloudPushInFlightRef.current += 1;
+        try {
+          const savedCloud = await uploadMediaToCloudAndSaveDb({
+            localUri: uri,
+            category: 'LOCKET_SNAP',
+            mediaType: 'IMAGE',
+            stamp: finalStamp,
+            caption: finalCaption,
+            idempotencyKey: tempId,
+          });
+
+          setLocketSnaps((prev) => {
+            const next = prev.map((s) =>
+                s.id === tempId
+                    ? {
+                      ...s,
+                      id: savedCloud.id,
+                      uri: savedCloud.remoteUrl,
+                      remoteUrl: savedCloud.remoteUrl,
+                    }
+                    : s,
+            );
+            storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
+            return next;
+          });
+        } catch (err) {
+          console.error('Lỗi lưu Locket vào Database:', err);
+          Alert.alert('Chưa lưu được lên Server', 'Không thể lưu ảnh Locket vào Database.');
+        } finally {
+          cloudPushInFlightRef.current -= 1;
+        }
+
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      },
+      [currentUserId, myProfile.nickname, workspaceKeys.LOCKET],
   );
 
   const forceTestGeminiOnEvent = useCallback(
-    async (eventItem: ImportantEvent) => {
-      const daysLeft = computeDaysUntilNextOccurrence(eventItem.eventDate);
-      const startMs = Date.now();
+      async (eventItem: ImportantEvent) => {
+        const daysLeft = computeDaysUntilNextOccurrence(eventItem.eventDate);
+        const startMs = Date.now();
 
-      const freshMessage = await generateUniqueAiReminder({
-        eventId: eventItem.id,
-        title: eventItem.title,
-        category: eventItem.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
-        daysUntilEvent: daysLeft,
-        partnerName: partnerProfile.nickname,
-        tone: eventItem.aiTone || 'FUNNY',
-        previousMessage: eventItem.customMessage,
-      });
+        const freshMessage = await generateUniqueAiReminder({
+          eventId: eventItem.id,
+          title: eventItem.title,
+          category: eventItem.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
+          daysUntilEvent: daysLeft,
+          partnerName: partnerProfile.nickname,
+          tone: eventItem.aiTone || 'FUNNY',
+          previousMessage: eventItem.customMessage,
+        });
 
-      const elapsedMs = Date.now() - startMs;
-      const todayIso = new Date().toISOString().split('T')[0];
+        const elapsedMs = Date.now() - startMs;
+        const todayIso = new Date().toISOString().split('T')[0];
 
-      setEvents((prev) => {
-        const next = prev.map((ev) =>
-          ev.id === eventItem.id
-            ? { ...ev, customMessage: freshMessage, lastAiGeneratedDate: todayIso }
-            : ev,
-        );
-        storage.setItem(workspaceKeys.EVENTS, JSON.stringify(next)).catch(() => null);
-        void syncRoomSnapshotToCloud({ events: next });
-        return next;
-      });
-
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      return { freshMessage, elapsedMs };
-    },
-    [partnerProfile.nickname, generateUniqueAiReminder, workspaceKeys.EVENTS, syncRoomSnapshotToCloud],
-  );
-
-  const reactToLocketSnap = useCallback(
-    async (snapId: string, emoji: string) => {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      setLocketSnaps((prev) => {
-        const next = prev.map((snap) =>
-          snap.id === snapId
-            ? { ...snap, reactions: [...snap.reactions.slice(-7), emoji] }
-            : snap,
-        );
-        storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
-        return next;
-      });
-    },
-    [workspaceKeys.LOCKET],
-  );
-
-  const deleteLocketSnap = useCallback(
-    async (snapId: string) => {
-      // Khóa không cho vòng lặp 4s kéo dữ liệu cũ đè lại trong lúc đang xóa
-      cloudPushInFlightRef.current += 1;
-      try {
-        setLocketSnaps((prev) => {
-          const next = prev.filter((s) => s.id !== snapId);
-          storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
+        setEvents((prev) => {
+          const draft = prev.map((ev) =>
+              ev.id === eventItem.id
+                  ? { ...ev, customMessage: freshMessage, lastAiGeneratedDate: todayIso }
+                  : ev,
+          );
+          const next = finalizeList('events', prev, draft);
+          storage.setItem(workspaceKeys.EVENTS, JSON.stringify(next)).catch(() => null);
+          void syncRoomSnapshotToCloud({ events: next });
           return next;
         });
 
-        // Chỉ gọi API xóa trên Database nếu ID không phải là ID tạm ở Local
-        if (!snapId.startsWith('locket_')) {
-          await deleteCloudMediaById(snapId);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        return { freshMessage, elapsedMs };
+      },
+      [partnerProfile.nickname, generateUniqueAiReminder, workspaceKeys.EVENTS, syncRoomSnapshotToCloud, finalizeList],
+  );
+
+  const reactToLocketSnap = useCallback(
+      async (snapId: string, emoji: string) => {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        setLocketSnaps((prev) => {
+          const next = prev.map((snap) =>
+              snap.id === snapId
+                  ? { ...snap, reactions: [...snap.reactions.slice(-7), emoji] }
+                  : snap,
+          );
+          storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
+          return next;
+        });
+      },
+      [workspaceKeys.LOCKET],
+  );
+
+  const deleteLocketSnap = useCallback(
+      async (snapId: string) => {
+        // Khóa không cho vòng lặp 4s kéo dữ liệu cũ đè lại trong lúc đang xóa
+        cloudPushInFlightRef.current += 1;
+        try {
+          setLocketSnaps((prev) => {
+            const next = prev.filter((s) => s.id !== snapId);
+            storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
+            return next;
+          });
+
+          // Chỉ gọi API xóa trên Database nếu ID không phải là ID tạm ở Local
+          if (!snapId.startsWith('locket_')) {
+            await deleteCloudMediaById(snapId);
+          }
+        } finally {
+          cloudPushInFlightRef.current -= 1;
         }
-      } finally {
-        cloudPushInFlightRef.current -= 1;
-      }
-    },
-    [workspaceKeys.LOCKET],
+      },
+      [workspaceKeys.LOCKET],
   );
 
   const rollRandomQuestion = useCallback(
-    async (categoryOverride?: QuestionCategory) => {
-      void Haptics.selectionAsync().catch(() => {});
-      const targetCat = categoryOverride || qaFilter;
-      if (categoryOverride) setQaFilter(categoryOverride);
+      async (categoryOverride?: QuestionCategory) => {
+        void Haptics.selectionAsync().catch(() => {});
+        const targetCat = categoryOverride || qaFilter;
+        if (categoryOverride) setQaFilter(categoryOverride);
 
-      const pool =
-        targetCat === 'ALL'
-          ? QUESTION_BANK
-          : QUESTION_BANK.filter((q) => q.category === targetCat);
+        const pool =
+            targetCat === 'ALL'
+                ? QUESTION_BANK
+                : QUESTION_BANK.filter((q) => q.category === targetCat);
 
-      const candidates = pool.filter((q) => q.id !== rawDailyQA.questionId);
-      const finalPool = candidates.length > 0 ? candidates : pool;
-      const picked = finalPool[Math.floor(Math.random() * finalPool.length)];
+        const candidates = pool.filter((q) => q.id !== rawDailyQA.questionId);
+        const finalPool = candidates.length > 0 ? candidates : pool;
+        const picked = finalPool[Math.floor(Math.random() * finalPool.length)];
 
-      const existingAnswered = qaHistory.find((h) => h.questionId === picked.id);
+        const existingAnswered = qaHistory.find((h) => h.questionId === picked.id);
 
-      const nextQA: DailyQAItem = existingAnswered || {
-        questionId: picked.id,
-        category: picked.category,
-        questionText: picked.text,
-        myAnswer: '',
-        partnerAnswer: null,
-        answeredAt: null,
-        answersByUserId: {},
-      };
+        const nextQA: DailyQAItem = existingAnswered || {
+          questionId: picked.id,
+          category: picked.category,
+          questionText: picked.text,
+          myAnswer: '',
+          partnerAnswer: null,
+          answeredAt: null,
+          answersByUserId: {},
+        };
 
-      setRawDailyQA(nextQA);
-      await storage.setItem(workspaceKeys.DAILY_QA, JSON.stringify(nextQA));
-      void syncRoomSnapshotToCloud({ dailyQA: nextQA });
-    },
-    [qaFilter, rawDailyQA.questionId, qaHistory, workspaceKeys.DAILY_QA, syncRoomSnapshotToCloud],
+        setRawDailyQA(nextQA);
+        await storage.setItem(workspaceKeys.DAILY_QA, JSON.stringify(nextQA));
+        void syncRoomSnapshotToCloud({ dailyQA: nextQA });
+      },
+      [qaFilter, rawDailyQA.questionId, qaHistory, workspaceKeys.DAILY_QA, syncRoomSnapshotToCloud],
   );
 
   const submitDailyAnswer = useCallback(
-    async (answerText: string) => {
-      const trimmed = answerText.trim();
-      if (!trimmed) return;
-      const todayIso = new Date().toISOString().split('T')[0];
+      async (answerText: string) => {
+        const trimmed = answerText.trim();
+        if (!trimmed) return;
+        const todayIso = new Date().toISOString().split('T')[0];
 
-      const updatedAnswersMap: Record<string, DailyQAAnswerEntry> = {
-        ...(rawDailyQA.answersByUserId || {}),
-        [currentUserId]: {
-          userId: currentUserId,
-          nickname: myProfile.nickname,
-          answer: trimmed,
+        const updatedAnswersMap: Record<string, DailyQAAnswerEntry> = {
+          ...(rawDailyQA.answersByUserId || {}),
+          [currentUserId]: {
+            userId: currentUserId,
+            nickname: myProfile.nickname,
+            answer: trimmed,
+            answeredAt: todayIso,
+          },
+        };
+
+        const updated: DailyQAItem = {
+          ...rawDailyQA,
+          myAnswer: trimmed,
           answeredAt: todayIso,
-        },
-      };
+          answersByUserId: updatedAnswersMap,
+        };
 
-      const updated: DailyQAItem = {
-        ...rawDailyQA,
-        myAnswer: trimmed,
-        answeredAt: todayIso,
-        answersByUserId: updatedAnswersMap,
-      };
+        setRawDailyQA(updated);
+        await storage.setItem(workspaceKeys.DAILY_QA, JSON.stringify(updated));
 
-      setRawDailyQA(updated);
-      await storage.setItem(workspaceKeys.DAILY_QA, JSON.stringify(updated));
+        let nextHistorySnapshot: DailyQAItem[] = [];
+        setQaHistory((prev) => {
+          const filtered = prev.filter((item) => item.questionId !== updated.questionId);
+          nextHistorySnapshot = [updated, ...filtered];
+          storage.setItem(workspaceKeys.QA_HISTORY, JSON.stringify(nextHistorySnapshot)).catch(() => null);
+          return nextHistorySnapshot;
+        });
 
-      let nextHistorySnapshot: DailyQAItem[] = [];
-      setQaHistory((prev) => {
-        const filtered = prev.filter((item) => item.questionId !== updated.questionId);
-        nextHistorySnapshot = [updated, ...filtered];
-        storage.setItem(workspaceKeys.QA_HISTORY, JSON.stringify(nextHistorySnapshot)).catch(() => null);
-        return nextHistorySnapshot;
-      });
+        api
+            .post('/api/v1/daily-answers', {
+              questionId: rawDailyQA.questionId,
+              questionText: rawDailyQA.questionText,
+              category: rawDailyQA.category,
+              userId: currentUserId,
+              nickname: myProfile.nickname,
+              answer: trimmed,
+            })
+            .catch(() => null);
 
-      api
-        .post('/api/v1/daily-answers', {
-          questionId: rawDailyQA.questionId,
-          questionText: rawDailyQA.questionText,
-          category: rawDailyQA.category,
-          userId: currentUserId,
-          nickname: myProfile.nickname,
-          answer: trimmed,
-        })
-        .catch(() => null);
+        void syncRoomSnapshotToCloud({
+          dailyQA: updated,
+          qaHistory: nextHistorySnapshot,
+        });
 
-      void syncRoomSnapshotToCloud({
-        dailyQA: updated,
-        qaHistory: nextHistorySnapshot,
-      });
-
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    },
-    [
-      rawDailyQA,
-      currentUserId,
-      myProfile.nickname,
-      workspaceKeys.DAILY_QA,
-      workspaceKeys.QA_HISTORY,
-      syncRoomSnapshotToCloud,
-    ],
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      },
+      [
+        rawDailyQA,
+        currentUserId,
+        myProfile.nickname,
+        workspaceKeys.DAILY_QA,
+        workspaceKeys.QA_HISTORY,
+        syncRoomSnapshotToCloud,
+      ],
   );
 
   const saveEvent = useCallback(
-    async (
-      payload: Omit<ImportantEvent, 'id' | 'notificationId' | 'syncStatus'>,
-      editingId?: string,
-    ) => {
-      const targetId = editingId || `evt_${Date.now()}`;
-      const todayIso = new Date().toISOString().split('T')[0];
-
-      let finalMessage = payload.customMessage.trim();
-      if (payload.category !== 'DATE_PLAN' && (!finalMessage || payload.autoDailyAi !== false)) {
-        const daysLeft = computeDaysUntilNextOccurrence(payload.eventDate);
-        try {
-          finalMessage = await generateUniqueAiReminder({
-            eventId: targetId,
-            title: payload.title,
-            category: payload.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
-            daysUntilEvent: daysLeft,
-            partnerName: partnerProfile.nickname,
-            tone: payload.aiTone || 'FUNNY',
-            previousMessage: payload.customMessage,
-          });
-        } catch {
-          // AI lỗi/offline thì dùng lời nhắc mặc định, vẫn phải lưu được sự kiện
-          finalMessage = payload.customMessage.trim() || `Sắp đến ${payload.title} rồi nhé!`;
-        }
-      }
-
-      await safeNotif(() => LocalNotificationService.cancelReminder(targetId), undefined);
-
-      let notifId: string | null = null;
-      let updatedDatePlan: DatePlanDetails | null = payload.datePlan || null;
-
-      if (payload.category === 'DATE_PLAN' && payload.datePlan) {
-        let dp = payload.datePlan;
-
-        if (
-          dp.transport === 'BUS_METRO' &&
-          !dp.transportNote?.trim() &&
-          (dp.address?.trim() || dp.locationName?.trim())
-        ) {
-          try {
-            const autoRoutes = await findSaigonBusItineraries({
-              destinationQuery: dp.address?.trim() || dp.locationName.trim(),
-              destinationMapsUrl: dp.googleMapsUrl,
-              maxResults: 1,
-            });
-            if (autoRoutes.length > 0) {
-              dp = {
-                ...dp,
-                transportNote: autoRoutes[0].formattedTransportNote,
-                googleMapsUrl: dp.googleMapsUrl || autoRoutes[0].googleMapsTransitUrl,
-                selectedBusItinerary: autoRoutes[0],
-              };
-            }
-          } catch {
-            // Bỏ qua nếu không tìm được tự động
-          }
-        }
-
-        const hasEndTime = dp.enableEndTime !== false && Boolean(dp.endTimeHm);
-
-        const scheduledIds = await safeNotif(
-          () =>
-            LocalNotificationService.scheduleDatePlanReminders({
-              sourceId: targetId,
-              title: payload.title,
-              dateIso: payload.eventDate,
-              startTimeHm: dp.startTimeHm || payload.notifyAtTime,
-              endTimeHm: hasEndTime ? dp.endTimeHm : undefined,
-              notifyStartTime: dp.notifyStartTime ?? true,
-              startRemindMinutesBefore:
-                typeof dp.startRemindMinutesBefore === 'number'
-                  ? dp.startRemindMinutesBefore
-                  : 30,
-              notifyEndTime: hasEndTime ? Boolean(dp.notifyEndTime) : false,
-              partnerNickname: partnerProfile.nickname,
-              locationName: dp.locationName,
-            }),
-          { startNotificationId: null, endNotificationId: null } as any,
-        );
-
-        notifId = scheduledIds?.startNotificationId ?? null;
-        updatedDatePlan = {
-          ...dp,
-          endTimeHm: hasEndTime ? dp.endTimeHm : undefined,
-          enableEndTime: hasEndTime,
-          notifyEndTime: hasEndTime ? Boolean(dp.notifyEndTime) : false,
-          endNotificationId: scheduledIds?.endNotificationId ?? null,
-        };
-      } else {
-        const notifTitlePrefix =
-          payload.category === 'BIRTHDAY' ? '🎂 Sinh nhật' : '💍 Kỷ niệm';
-
-        notifId = await safeNotif(
-          () =>
-            LocalNotificationService.scheduleCustomReminder({
-              sourceId: targetId,
-              category: payload.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
-              title: `${notifTitlePrefix}: ${payload.title}`,
-              body: finalMessage || `Hẹn lúc ${payload.notifyAtTime} ngày ${payload.eventDate}`,
-              eventDateIso: payload.eventDate,
-              daysBefore: payload.notifyDaysBefore,
-              timeHm: payload.notifyAtTime,
-            }),
-          null as string | null,
-        );
-      }
-
-      let syncStatus: SyncStatus = 'PENDING_SYNC';
-      try {
-        if (editingId) {
-          await api.patch(`/api/v1/milestones/${editingId}`, {
-            ...payload,
-            datePlan: updatedDatePlan,
-            customMessage: finalMessage,
-            idempotencyKey: targetId,
-          });
-        } else {
-          await api.post('/api/v1/milestones', {
-            ...payload,
-            datePlan: updatedDatePlan,
-            customMessage: finalMessage,
-            idempotencyKey: targetId,
-          });
-        }
-        syncStatus = 'SYNCED';
-      } catch {
-        syncStatus = 'PENDING_SYNC';
-      }
-
-      const record: ImportantEvent = {
-        ...payload,
-        id: targetId,
-        datePlan: updatedDatePlan,
-        customMessage: finalMessage,
-        autoDailyAi: payload.category === 'DATE_PLAN' ? false : (payload.autoDailyAi ?? true),
-        lastAiGeneratedDate: todayIso,
-        notificationId: notifId,
-        syncStatus,
-      };
-
-      setEvents((prev) => {
-        const next = editingId
-          ? prev.map((item) => (item.id === editingId ? record : item))
-          : [record, ...prev];
-        storage.setItem(workspaceKeys.EVENTS, JSON.stringify(next)).catch(() => null);
-        void syncRoomSnapshotToCloud({ events: next });
-        return next;
-      });
-
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    },
-    [partnerProfile.nickname, generateUniqueAiReminder, workspaceKeys.EVENTS, syncRoomSnapshotToCloud],
-  );
-
-  const deleteEvent = useCallback(
-    async (eventId: string) => {
-      await LocalNotificationService.cancelReminder(eventId);
-      setEvents((prev) => {
-        const next = prev.filter((item) => item.id !== eventId);
-        storage.setItem(workspaceKeys.EVENTS, JSON.stringify(next)).catch(() => null);
-        void syncRoomSnapshotToCloud({ events: next });
-        return next;
-      });
-      try {
-        await api.delete(`/api/v1/milestones/${eventId}`);
-      } catch {
-        // Đã cập nhật vào snapshot chờ đồng bộ
-      }
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    },
-    [workspaceKeys.EVENTS, syncRoomSnapshotToCloud],
-  );
-
-  const saveGoal = useCallback(
-    async (
-      payload: Omit<CoupleGoalItem, 'id' | 'isCompleted' | 'notificationId' | 'syncStatus'>,
-      editingId?: string,
-    ) => {
-      const targetId = editingId || `goal_${Date.now()}`;
-      const isAlreadyDone = payload.targetAmount > 0 && payload.currentAmount >= payload.targetAmount;
-
-      const notifId = isAlreadyDone
-        ? null
-        : await safeNotif(
-            () =>
-              LocalNotificationService.scheduleCustomReminder({
-                sourceId: targetId,
-                category: 'GOAL',
-                title: `🎯 Mục tiêu cặp đôi: ${payload.title}`,
-                body: payload.customNotifyMessage,
-                eventDateIso: payload.targetDate,
-                daysBefore: 0,
-                timeHm: payload.notifyTime,
-              }),
-            null as string | null,
-          );
-
-      let syncStatus: SyncStatus = 'PENDING_SYNC';
-      try {
-        if (editingId) {
-          await api.patch(`/api/v1/couples/goals/${editingId}`, {
-            ...payload,
-            isCompleted: isAlreadyDone,
-            idempotencyKey: targetId,
-          });
-        } else {
-          await api.post('/api/v1/couples/goals', {
-            ...payload,
-            isCompleted: isAlreadyDone,
-            idempotencyKey: targetId,
-          });
-        }
-        syncStatus = 'SYNCED';
-      } catch {
-        syncStatus = 'PENDING_SYNC';
-      }
-
-      const record: CoupleGoalItem = {
-        ...payload,
-        id: targetId,
-        isCompleted: isAlreadyDone,
-        notificationId: notifId,
-        syncStatus,
-      };
-
-      setGoals((prev) => {
-        const next = editingId
-          ? prev.map((g) => (g.id === editingId ? record : g))
-          : [record, ...prev];
-        storage.setItem(workspaceKeys.GOALS, JSON.stringify(next)).catch(() => null);
-        void syncRoomSnapshotToCloud({ goals: next });
-        return next;
-      });
-
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    },
-    [workspaceKeys.GOALS, syncRoomSnapshotToCloud],
-  );
-
-  const toggleGoalCompletion = useCallback(
-    async (goalId: string) => {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
-      let updatedGoalRecord: CoupleGoalItem | null = null;
-
-      setGoals((prev) => {
-        const next = prev.map((g) => {
-          if (g.id !== goalId) return g;
-          const nextCompleted = !g.isCompleted;
-          if (nextCompleted) {
-            void LocalNotificationService.cancelReminder(g.id);
-          } else {
-            void LocalNotificationService.scheduleCustomReminder({
-              sourceId: g.id,
-              category: 'GOAL',
-              title: `🎯 Mục tiêu cặp đôi: ${g.title}`,
-              body: g.customNotifyMessage,
-              eventDateIso: g.targetDate,
-              daysBefore: 0,
-              timeHm: g.notifyTime,
-            });
-          }
-          updatedGoalRecord = {
-            ...g,
-            isCompleted: nextCompleted,
-            currentAmount: nextCompleted ? g.targetAmount : g.currentAmount,
-          };
-          return updatedGoalRecord;
-        });
-        storage.setItem(workspaceKeys.GOALS, JSON.stringify(next)).catch(() => null);
-        void syncRoomSnapshotToCloud({ goals: next });
-        return next;
-      });
-
-      if (updatedGoalRecord) {
-        api
-          .patch(`/api/v1/couples/goals/${goalId}`, updatedGoalRecord)
-          .catch(() => null);
-      }
-    },
-    [workspaceKeys.GOALS, syncRoomSnapshotToCloud],
-  );
-
-  const deleteGoal = useCallback(
-    async (goalId: string) => {
-      await LocalNotificationService.cancelReminder(goalId);
-      setGoals((prev) => {
-        const next = prev.filter((g) => g.id !== goalId);
-        storage.setItem(workspaceKeys.GOALS, JSON.stringify(next)).catch(() => null);
-        void syncRoomSnapshotToCloud({ goals: next });
-        return next;
-      });
-      try {
-        await api.delete(`/api/v1/couples/goals/${goalId}`);
-      } catch {
-        // Đã cập nhật vào snapshot của phòng
-      }
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    },
-    [workspaceKeys.GOALS, syncRoomSnapshotToCloud],
-  );
-
-  const pickAndSaveMedia = useCallback(
-    async (type: 'VIDEO' | 'IMAGE') => {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert(
-          'Quyền truy cập bị từ chối',
-          'Hãy cấp quyền Thư viện ảnh/video trong Cài đặt để lưu giữ kỷ niệm chung.',
-          [
-            { text: 'Đóng', style: 'cancel' },
-            { text: 'Mở Cài đặt', onPress: () => Linking.openSettings() },
-          ],
-        );
-        return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: type === 'VIDEO' ? ['videos'] : ['images'],
-        allowsEditing: false,
-        quality: socialPrefs.hdMediaUpload ? 0.92 : 0.75,
-      });
-
-      if (result.canceled || !result.assets?.[0]) return;
-      const asset = result.assets[0];
-      // --- BẮT ĐẦU KIỂM TRA GIỚI HẠN VIDEO 200MB ---
-      const MAX_VIDEO_BYTES = 200 * 1024 * 1024; // 200MB
-      if (type === 'VIDEO') {
-        let videoSize = asset.fileSize ?? 0;
-
-        // Trên Web đôi khi asset.fileSize không trả về, lấy từ Blob để chính xác 100%
-        if (!videoSize && Platform.OS === 'web') {
-          try {
-            const blob = await fetch(asset.uri).then((r) => r.blob());
-            videoSize = blob.size;
-          } catch {}
-        }
-
-        if (videoSize > MAX_VIDEO_BYTES) {
-          const sizeInMb = (videoSize / (1024 * 1024)).toFixed(1);
-          Alert.alert(
-            'Video vượt quá 200MB',
-            `Video bạn chọn nặng ${sizeInMb}MB (tối đa cho phép là 200MB). Vui lòng chọn video ngắn hoặc nhẹ hơn nhé!`,
-          );
-          return;
-        }
-      }
-      // --- KẾT THÚC KIỂM TRA GIỚI HẠN VIDEO 200MB ---
-      setUploadingMedia(true);
-
-      try {
+      async (
+          payload: Omit<ImportantEvent, 'id' | 'notificationId' | 'syncStatus'>,
+          editingId?: string,
+      ) => {
+        const targetId = editingId || `evt_${Date.now()}`;
         const todayIso = new Date().toISOString().split('T')[0];
-        const itemId = `media_${Date.now()}`;
-        const captionText = `${type === 'VIDEO' ? 'Thước phim' : 'Bức ảnh'} ngày ${todayIso}`;
 
-        // Trích xuất durationSec từ asset.duration (mili-giây -> giây)
-        const durationSec = asset.duration ? Math.round(asset.duration / 1000) : 0;
+        let finalMessage = payload.customMessage.trim();
+        if (payload.category !== 'DATE_PLAN' && (!finalMessage || payload.autoDailyAi !== false)) {
+          const daysLeft = computeDaysUntilNextOccurrence(payload.eventDate);
+          try {
+            finalMessage = await generateUniqueAiReminder({
+              eventId: targetId,
+              title: payload.title,
+              category: payload.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
+              daysUntilEvent: daysLeft,
+              partnerName: partnerProfile.nickname,
+              tone: payload.aiTone || 'FUNNY',
+              previousMessage: payload.customMessage,
+            });
+          } catch {
+            // AI lỗi/offline thì dùng lời nhắc mặc định, vẫn phải lưu được sự kiện
+            finalMessage = payload.customMessage.trim() || `Sắp đến ${payload.title} rồi nhé!`;
+          }
+        }
 
-        let remoteUrl: string | null = null;
-        let thumbnailUri: string | null = null;
-        let finalDuration = durationSec;
-        let finalId = itemId;
+        await safeNotif(() => LocalNotificationService.cancelReminder(targetId), undefined);
+
+        let notifId: string | null = null;
+        let updatedDatePlan: DatePlanDetails | null = payload.datePlan || null;
+
+        if (payload.category === 'DATE_PLAN' && payload.datePlan) {
+          let dp = payload.datePlan;
+
+          if (
+              dp.transport === 'BUS_METRO' &&
+              !dp.transportNote?.trim() &&
+              (dp.address?.trim() || dp.locationName?.trim())
+          ) {
+            try {
+              const autoRoutes = await findSaigonBusItineraries({
+                destinationQuery: dp.address?.trim() || dp.locationName.trim(),
+                destinationMapsUrl: dp.googleMapsUrl,
+                maxResults: 1,
+              });
+              if (autoRoutes.length > 0) {
+                dp = {
+                  ...dp,
+                  transportNote: autoRoutes[0].formattedTransportNote,
+                  googleMapsUrl: dp.googleMapsUrl || autoRoutes[0].googleMapsTransitUrl,
+                  selectedBusItinerary: autoRoutes[0],
+                };
+              }
+            } catch {
+              // Bỏ qua nếu không tìm được tự động
+            }
+          }
+
+          const hasEndTime = dp.enableEndTime !== false && Boolean(dp.endTimeHm);
+
+          const scheduledIds = await safeNotif(
+              () =>
+                  LocalNotificationService.scheduleDatePlanReminders({
+                    sourceId: targetId,
+                    title: payload.title,
+                    dateIso: payload.eventDate,
+                    startTimeHm: dp.startTimeHm || payload.notifyAtTime,
+                    endTimeHm: hasEndTime ? dp.endTimeHm : undefined,
+                    notifyStartTime: dp.notifyStartTime ?? true,
+                    startRemindMinutesBefore:
+                        typeof dp.startRemindMinutesBefore === 'number'
+                            ? dp.startRemindMinutesBefore
+                            : 30,
+                    notifyEndTime: hasEndTime ? Boolean(dp.notifyEndTime) : false,
+                    partnerNickname: partnerProfile.nickname,
+                    locationName: dp.locationName,
+                  }),
+              { startNotificationId: null, endNotificationId: null } as any,
+          );
+
+          notifId = scheduledIds?.startNotificationId ?? null;
+          updatedDatePlan = {
+            ...dp,
+            endTimeHm: hasEndTime ? dp.endTimeHm : undefined,
+            enableEndTime: hasEndTime,
+            notifyEndTime: hasEndTime ? Boolean(dp.notifyEndTime) : false,
+            endNotificationId: scheduledIds?.endNotificationId ?? null,
+          };
+        } else {
+          const notifTitlePrefix =
+              payload.category === 'BIRTHDAY' ? '🎂 Sinh nhật' : '💍 Kỷ niệm';
+
+          notifId = await safeNotif(
+              () =>
+                  LocalNotificationService.scheduleCustomReminder({
+                    sourceId: targetId,
+                    category: payload.category === 'BIRTHDAY' ? 'BIRTHDAY' : 'ANNIVERSARY',
+                    title: `${notifTitlePrefix}: ${payload.title}`,
+                    body: finalMessage || `Hẹn lúc ${payload.notifyAtTime} ngày ${payload.eventDate}`,
+                    eventDateIso: payload.eventDate,
+                    daysBefore: payload.notifyDaysBefore,
+                    timeHm: payload.notifyAtTime,
+                  }),
+              null as string | null,
+          );
+        }
+
         let syncStatus: SyncStatus = 'PENDING_SYNC';
-
-        // Tải luồng nhị phân lên Cloud và lưu DB (cloudMediaService tự xử lý thumbnail đệ quy)
         try {
-          const cloudRecord = await uploadMediaToCloudAndSaveDb({
-            localUri: asset.uri,
-            category: 'ALBUM_MEDIA',
-            mediaType: type,
-            caption: captionText,
-            durationSec,
-            idempotencyKey: itemId,
-          });
-          remoteUrl = cloudRecord.remoteUrl;
-          thumbnailUri = cloudRecord.thumbnailUrl ?? null;
-          finalDuration = cloudRecord.durationSec ?? durationSec;
-          finalId = cloudRecord.id || itemId;
+          if (editingId) {
+            await api.patch(`/api/v1/milestones/${editingId}`, {
+              ...payload,
+              datePlan: updatedDatePlan,
+              customMessage: finalMessage,
+              idempotencyKey: targetId,
+            });
+          } else {
+            await api.post('/api/v1/milestones', {
+              ...payload,
+              datePlan: updatedDatePlan,
+              customMessage: finalMessage,
+              idempotencyKey: targetId,
+            });
+          }
           syncStatus = 'SYNCED';
         } catch {
           syncStatus = 'PENDING_SYNC';
         }
 
-        const newMedia: CoupleMediaItem = {
-          id: finalId,
-          uri: remoteUrl || asset.uri,
-          remoteUrl,
-          thumbnailUri,
-          mediaType: type,
-          caption: captionText,
-          durationSec: finalDuration,
-          uploaderId: currentUserId,
-          createdAt: todayIso,
+        const record: ImportantEvent = {
+          ...payload,
+          id: targetId,
+          datePlan: updatedDatePlan,
+          customMessage: finalMessage,
+          autoDailyAi: payload.category === 'DATE_PLAN' ? false : (payload.autoDailyAi ?? true),
+          lastAiGeneratedDate: todayIso,
+          notificationId: notifId,
           syncStatus,
         };
 
-        setMediaList((prev) => {
-          const next = [newMedia, ...prev];
-          storage.setItem(workspaceKeys.MEDIA, JSON.stringify(next)).catch(() => null);
+        setEvents((prev) => {
+          const draft = editingId
+              ? prev.map((item) => (item.id === editingId ? record : item))
+              : [record, ...prev];
+          const next = finalizeList('events', prev, draft);
+          storage.setItem(workspaceKeys.EVENTS, JSON.stringify(next)).catch(() => null);
+          void syncRoomSnapshotToCloud({ events: next });
           return next;
         });
+
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } finally {
-        setUploadingMedia(false);
-      }
-    },
-    [currentUserId, socialPrefs.hdMediaUpload, workspaceKeys.MEDIA],
+      },
+      [partnerProfile.nickname, generateUniqueAiReminder, workspaceKeys.EVENTS, syncRoomSnapshotToCloud, finalizeList],
   );
 
-const deleteMedia = useCallback(
-    async (mediaId: string) => {
-      cloudPushInFlightRef.current += 1;
-      try {
-        setMediaList((prev) => {
-          const next = prev.filter((m) => m.id !== mediaId);
-          storage.setItem(workspaceKeys.MEDIA, JSON.stringify(next)).catch(() => null);
+  const deleteEvent = useCallback(
+      async (eventId: string) => {
+        await LocalNotificationService.cancelReminder(eventId);
+        setEvents((prev) => {
+          const next = finalizeList('events', prev, prev.filter((item) => item.id !== eventId));
+          storage.setItem(workspaceKeys.EVENTS, JSON.stringify(next)).catch(() => null);
+          void syncRoomSnapshotToCloud({ events: next });
+          return next;
+        });
+        try {
+          await api.delete(`/api/v1/milestones/${eventId}`);
+        } catch {
+          // Đã cập nhật vào snapshot chờ đồng bộ
+        }
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      },
+      [workspaceKeys.EVENTS, syncRoomSnapshotToCloud, finalizeList],
+  );
+
+  const saveGoal = useCallback(
+      async (
+          payload: Omit<CoupleGoalItem, 'id' | 'isCompleted' | 'notificationId' | 'syncStatus'>,
+          editingId?: string,
+      ) => {
+        const targetId = editingId || `goal_${Date.now()}`;
+        const isAlreadyDone = payload.targetAmount > 0 && payload.currentAmount >= payload.targetAmount;
+
+        const notifId = isAlreadyDone
+            ? null
+            : await safeNotif(
+                () =>
+                    LocalNotificationService.scheduleCustomReminder({
+                      sourceId: targetId,
+                      category: 'GOAL',
+                      title: `🎯 Mục tiêu cặp đôi: ${payload.title}`,
+                      body: payload.customNotifyMessage,
+                      eventDateIso: payload.targetDate,
+                      daysBefore: 0,
+                      timeHm: payload.notifyTime,
+                    }),
+                null as string | null,
+            );
+
+        let syncStatus: SyncStatus = 'PENDING_SYNC';
+        try {
+          if (editingId) {
+            await api.patch(`/api/v1/couples/goals/${editingId}`, {
+              ...payload,
+              isCompleted: isAlreadyDone,
+              idempotencyKey: targetId,
+            });
+          } else {
+            await api.post('/api/v1/couples/goals', {
+              ...payload,
+              isCompleted: isAlreadyDone,
+              idempotencyKey: targetId,
+            });
+          }
+          syncStatus = 'SYNCED';
+        } catch {
+          syncStatus = 'PENDING_SYNC';
+        }
+
+        const record: CoupleGoalItem = {
+          ...payload,
+          id: targetId,
+          isCompleted: isAlreadyDone,
+          notificationId: notifId,
+          syncStatus,
+        };
+
+        setGoals((prev) => {
+          const draft = editingId
+              ? prev.map((g) => (g.id === editingId ? record : g))
+              : [record, ...prev];
+          const next = finalizeList('goals', prev, draft);
+          storage.setItem(workspaceKeys.GOALS, JSON.stringify(next)).catch(() => null);
+          void syncRoomSnapshotToCloud({ goals: next });
           return next;
         });
 
-        if (!mediaId.startsWith('media_')) {
-          await deleteCloudMediaById(mediaId);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      },
+      [workspaceKeys.GOALS, syncRoomSnapshotToCloud, finalizeList],
+  );
+
+  const toggleGoalCompletion = useCallback(
+      async (goalId: string) => {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+        let updatedGoalRecord: CoupleGoalItem | null = null;
+
+        setGoals((prev) => {
+          const draft = prev.map((g) => {
+            if (g.id !== goalId) return g;
+            const nextCompleted = !g.isCompleted;
+            if (nextCompleted) {
+              void LocalNotificationService.cancelReminder(g.id);
+            } else {
+              void LocalNotificationService.scheduleCustomReminder({
+                sourceId: g.id,
+                category: 'GOAL',
+                title: `🎯 Mục tiêu cặp đôi: ${g.title}`,
+                body: g.customNotifyMessage,
+                eventDateIso: g.targetDate,
+                daysBefore: 0,
+                timeHm: g.notifyTime,
+              });
+            }
+            updatedGoalRecord = {
+              ...g,
+              isCompleted: nextCompleted,
+              currentAmount: nextCompleted ? g.targetAmount : g.currentAmount,
+            };
+            return updatedGoalRecord;
+          });
+          const next = finalizeList('goals', prev, draft);
+          storage.setItem(workspaceKeys.GOALS, JSON.stringify(next)).catch(() => null);
+          void syncRoomSnapshotToCloud({ goals: next });
+          return next;
+        });
+
+        if (updatedGoalRecord) {
+          api
+              .patch(`/api/v1/couples/goals/${goalId}`, updatedGoalRecord)
+              .catch(() => null);
         }
-      } finally {
-        cloudPushInFlightRef.current -= 1;
-      }
-    },
-    [workspaceKeys.MEDIA],
+      },
+      [workspaceKeys.GOALS, syncRoomSnapshotToCloud, finalizeList],
+  );
+
+  const deleteGoal = useCallback(
+      async (goalId: string) => {
+        await LocalNotificationService.cancelReminder(goalId);
+        setGoals((prev) => {
+          const next = finalizeList('goals', prev, prev.filter((g) => g.id !== goalId));
+          storage.setItem(workspaceKeys.GOALS, JSON.stringify(next)).catch(() => null);
+          void syncRoomSnapshotToCloud({ goals: next });
+          return next;
+        });
+        try {
+          await api.delete(`/api/v1/couples/goals/${goalId}`);
+        } catch {
+          // Đã cập nhật vào snapshot của phòng
+        }
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      },
+      [workspaceKeys.GOALS, syncRoomSnapshotToCloud, finalizeList],
+  );
+
+  const pickAndSaveMedia = useCallback(
+      async (type: 'VIDEO' | 'IMAGE') => {
+        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!perm.granted) {
+          Alert.alert(
+              'Quyền truy cập bị từ chối',
+              'Hãy cấp quyền Thư viện ảnh/video trong Cài đặt để lưu giữ kỷ niệm chung.',
+              [
+                { text: 'Đóng', style: 'cancel' },
+                { text: 'Mở Cài đặt', onPress: () => Linking.openSettings() },
+              ],
+          );
+          return;
+        }
+
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: type === 'VIDEO' ? ['videos'] : ['images'],
+          allowsEditing: false,
+          quality: socialPrefs.hdMediaUpload ? 0.92 : 0.75,
+        });
+
+        if (result.canceled || !result.assets?.[0]) return;
+        const asset = result.assets[0];
+        // --- BẮT ĐẦU KIỂM TRA GIỚI HẠN VIDEO 200MB ---
+        const MAX_VIDEO_BYTES = 200 * 1024 * 1024; // 200MB
+        if (type === 'VIDEO') {
+          let videoSize = asset.fileSize ?? 0;
+
+          // Trên Web đôi khi asset.fileSize không trả về, lấy từ Blob để chính xác 100%
+          if (!videoSize && Platform.OS === 'web') {
+            try {
+              const blob = await fetch(asset.uri).then((r) => r.blob());
+              videoSize = blob.size;
+            } catch {}
+          }
+
+          if (videoSize > MAX_VIDEO_BYTES) {
+            const sizeInMb = (videoSize / (1024 * 1024)).toFixed(1);
+            Alert.alert(
+                'Video vượt quá 200MB',
+                `Video bạn chọn nặng ${sizeInMb}MB (tối đa cho phép là 200MB). Vui lòng chọn video ngắn hoặc nhẹ hơn nhé!`,
+            );
+            return;
+          }
+        }
+        // --- KẾT THÚC KIỂM TRA GIỚI HẠN VIDEO 200MB ---
+        setUploadingMedia(true);
+
+        try {
+          const todayIso = new Date().toISOString().split('T')[0];
+          const itemId = `media_${Date.now()}`;
+          const captionText = `${type === 'VIDEO' ? 'Thước phim' : 'Bức ảnh'} ngày ${todayIso}`;
+
+          // Trích xuất durationSec từ asset.duration (mili-giây -> giây)
+          const durationSec = asset.duration ? Math.round(asset.duration / 1000) : 0;
+
+          let remoteUrl: string | null = null;
+          let thumbnailUri: string | null = null;
+          let finalDuration = durationSec;
+          let finalId = itemId;
+          let syncStatus: SyncStatus = 'PENDING_SYNC';
+
+          // Tải luồng nhị phân lên Cloud và lưu DB (cloudMediaService tự xử lý thumbnail đệ quy)
+          try {
+            const cloudRecord = await uploadMediaToCloudAndSaveDb({
+              localUri: asset.uri,
+              category: 'ALBUM_MEDIA',
+              mediaType: type,
+              caption: captionText,
+              durationSec,
+              idempotencyKey: itemId,
+            });
+            remoteUrl = cloudRecord.remoteUrl;
+            thumbnailUri = cloudRecord.thumbnailUrl ?? null;
+            finalDuration = cloudRecord.durationSec ?? durationSec;
+            finalId = cloudRecord.id || itemId;
+            syncStatus = 'SYNCED';
+          } catch {
+            syncStatus = 'PENDING_SYNC';
+          }
+
+          const newMedia: CoupleMediaItem = {
+            id: finalId,
+            uri: remoteUrl || asset.uri,
+            remoteUrl,
+            thumbnailUri,
+            mediaType: type,
+            caption: captionText,
+            durationSec: finalDuration,
+            uploaderId: currentUserId,
+            createdAt: todayIso,
+            syncStatus,
+          };
+
+          setMediaList((prev) => {
+            const next = [newMedia, ...prev];
+            storage.setItem(workspaceKeys.MEDIA, JSON.stringify(next)).catch(() => null);
+            return next;
+          });
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        } finally {
+          setUploadingMedia(false);
+        }
+      },
+      [currentUserId, socialPrefs.hdMediaUpload, workspaceKeys.MEDIA],
+  );
+
+  const deleteMedia = useCallback(
+      async (mediaId: string) => {
+        cloudPushInFlightRef.current += 1;
+        try {
+          setMediaList((prev) => {
+            const next = prev.filter((m) => m.id !== mediaId);
+            storage.setItem(workspaceKeys.MEDIA, JSON.stringify(next)).catch(() => null);
+            return next;
+          });
+
+          if (!mediaId.startsWith('media_')) {
+            await deleteCloudMediaById(mediaId);
+          }
+        } finally {
+          cloudPushInFlightRef.current -= 1;
+        }
+      },
+      [workspaceKeys.MEDIA],
   );
 
   const retryPendingSync = useCallback(async () => {
@@ -2835,7 +2879,7 @@ const deleteMedia = useCallback(
           const next = prev.map((item) => {
             if (item.syncStatus === 'SYNCED') return item;
             const matched = flushedMedia.find(
-              (f) => f.id === item.id || f.caption === item.caption,
+                (f) => f.id === item.id || f.caption === item.caption,
             );
             if (!matched) return item;
             return {
@@ -2853,27 +2897,27 @@ const deleteMedia = useCallback(
       }
 
       const updatedEvents = await Promise.all(
-        events.map(async (ev) => {
-          if (ev.syncStatus === 'SYNCED') return ev;
-          try {
-            await api.post('/api/v1/milestones', { ...ev, idempotencyKey: ev.id });
-            return { ...ev, syncStatus: 'SYNCED' as SyncStatus };
-          } catch {
-            return ev;
-          }
-        }),
+          events.map(async (ev) => {
+            if (ev.syncStatus === 'SYNCED') return ev;
+            try {
+              await api.post('/api/v1/milestones', { ...ev, idempotencyKey: ev.id });
+              return { ...ev, syncStatus: 'SYNCED' as SyncStatus };
+            } catch {
+              return ev;
+            }
+          }),
       );
 
       const updatedGoals = await Promise.all(
-        goals.map(async (g) => {
-          if (g.syncStatus === 'SYNCED') return g;
-          try {
-            await api.post('/api/v1/couples/goals', { ...g, idempotencyKey: g.id });
-            return { ...g, syncStatus: 'SYNCED' as SyncStatus };
-          } catch {
-            return g;
-          }
-        }),
+          goals.map(async (g) => {
+            if (g.syncStatus === 'SYNCED') return g;
+            try {
+              await api.post('/api/v1/couples/goals', { ...g, idempotencyKey: g.id });
+              return { ...g, syncStatus: 'SYNCED' as SyncStatus };
+            } catch {
+              return g;
+            }
+          }),
       );
 
       setEvents(updatedEvents);
@@ -2885,10 +2929,10 @@ const deleteMedia = useCallback(
 
       if (coupleId) {
         await pullAndMergeCloudWorkspace(
-          updatedEvents,
-          updatedGoals,
-          rawDailyQARef.current,
-          qaHistoryRef.current,
+            updatedEvents,
+            updatedGoals,
+            rawDailyQARef.current,
+            qaHistoryRef.current,
         );
       }
     } finally {
@@ -2907,15 +2951,15 @@ const deleteMedia = useCallback(
 
   const sortedEvents = useMemo(() => {
     return [...events].sort(
-      (a, b) =>
-        computeDaysUntilNextOccurrence(
-          a.eventDate,
-          a.category !== 'DATE_PLAN',
-        ) -
-        computeDaysUntilNextOccurrence(
-          b.eventDate,
-          b.category !== 'DATE_PLAN',
-        ),
+        (a, b) =>
+            computeDaysUntilNextOccurrence(
+                a.eventDate,
+                a.category !== 'DATE_PLAN',
+            ) -
+            computeDaysUntilNextOccurrence(
+                b.eventDate,
+                b.category !== 'DATE_PLAN',
+            ),
     );
   }, [events]);
 
