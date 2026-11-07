@@ -1431,7 +1431,7 @@ export function useCoupleWorkspace() {
         const norm = normalizeAiBody(body);
         if (!norm) return;
         if (!recentAiBodiesRef.current) {
-          recentAiBodiesRef.current = new Map();
+          const recentAiBodiesRef = useRef<Map<string, string[]>>(new Map());
         }
         const prev = recentAiBodiesRef.current.get(eventId) || [];
         const next = [norm, ...prev.filter((h) => h !== norm)].slice(0, 5);
