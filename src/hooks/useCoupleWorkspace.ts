@@ -1132,6 +1132,16 @@ const QUESTION_BANK: Array<{
 
 const COUPLE_ROOM_POLL_MS = 4000;
 
+// Chặn request treo vô hạn làm kẹt cờ khóa của vòng poll
+const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${label} timeout`)), ms);
+      promise.then(
+          (v) => { clearTimeout(timer); resolve(v); },
+          (e) => { clearTimeout(timer); reject(e); },
+      );
+    });
+
 // Thông báo cục bộ không chạy được trên web (và có thể lỗi khi chưa cấp quyền).
 // Bọc lại để lỗi thông báo không bao giờ chặn việc lưu dữ liệu.
 const safeNotif = async <T,>(fn: () => Promise<T>, fallback: T): Promise<T> => {
@@ -1207,7 +1217,7 @@ export function useCoupleWorkspace() {
   const locketSnapsRef = useRef<LocketSnapItem[]>([]);
   locketSnapsRef.current = locketSnaps;
 
-  const recentAiBodiesRef = useRef>(new Map());
+  const recentAiBodiesRef = useRef<Map<string, string[]>>(new Map());
 
   const [qaFilter, setQaFilter] = useState<QuestionCategory>('ALL');
   const [qaHistory, setQaHistory] = useState<DailyQAItem[]>([]);
@@ -1262,13 +1272,13 @@ export function useCoupleWorkspace() {
         if (!coupleId) return;
         cloudPushInFlightRef.current += 1;
         try {
-          await pushCoupleRoomSnapshotToCloud({
+          await withTimeout(pushCoupleRoomSnapshotToCloud({
             coupleId,
             events: withTombstones(overrides?.events ?? eventsRef.current, tombsRef.current.events),
             goals: withTombstones(overrides?.goals ?? goalsRef.current, tombsRef.current.goals),
-            dailyQA: overrides?.dailyQA ?? rawDailyQARef.current,
-            qaHistory: overrides?.qaHistory ?? qaHistoryRef.current,
-          });
+            ...(overrides?.dailyQA ? { dailyQA: overrides.dailyQA } : {}),
+            ...(overrides?.qaHistory ? { qaHistory: overrides.qaHistory } : {}),
+          }), 20000, 'push');
         } finally {
           cloudPushInFlightRef.current -= 1;
         }
@@ -1721,7 +1731,7 @@ export function useCoupleWorkspace() {
 
       setEvents(parsedEvents);
       if (!recentAiBodiesRef.current) {
-        const recentAiBodiesRef = useRef<Map<string, string[]>>(new Map());
+        recentAiBodiesRef.current = new Map();
       }
       parsedEvents.forEach((ev) => {
         if (ev.customMessage && ev.category !== 'DATE_PLAN') {
@@ -1977,13 +1987,18 @@ export function useCoupleWorkspace() {
       if (stopped || cloudPullBusyRef.current || cloudPushInFlightRef.current > 0) return;
       cloudPullBusyRef.current = true;
       try {
-        await pullAndMergeCloudWorkspace(
-            eventsRef.current,
-            goalsRef.current,
-            rawDailyQARef.current,
-            qaHistoryRef.current,
+        await withTimeout(
+            pullAndMergeCloudWorkspace(
+                eventsRef.current,
+                goalsRef.current,
+                rawDailyQARef.current,
+                qaHistoryRef.current,
+            ),
+            25000,
+            'pull',
         );
-      } catch {
+      } catch (pullErr) {
+        console.warn('[room-sync] pull lỗi:', (pullErr as any)?.message || pullErr);
         // Lượt poll kế tiếp sẽ thử lại
       } finally {
         cloudPullBusyRef.current = false;
@@ -2546,6 +2561,8 @@ export function useCoupleWorkspace() {
           notifId = scheduledIds?.startNotificationId ?? null;
           updatedDatePlan = {
             ...dp,
+            stops: safeStops,
+            selectedBusItinerary: dp.selectedBusItinerary ?? null,
             endTimeHm: hasEndTime ? dp.endTimeHm : undefined,
             enableEndTime: hasEndTime,
             notifyEndTime: hasEndTime ? Boolean(dp.notifyEndTime) : false,
