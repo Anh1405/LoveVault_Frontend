@@ -1583,7 +1583,7 @@ export function useCoupleWorkspace() {
             m.caption !== 'thumbnail',
         );
 
-        if (cleanCloudAlbums.length > 0) {
+        if (Array.isArray(cleanCloudAlbums)) {
           const cloudMediaIds = new Set(cleanCloudAlbums.map((m) => m.id));
           const unsyncedLocalMedia = mediaListRef.current.filter(
             (loc) => loc.syncStatus === 'PENDING_SYNC' && !cloudMediaIds.has(loc.id),
@@ -1611,10 +1611,10 @@ export function useCoupleWorkspace() {
           }
         }
 
-        if (rawCloudLockets.length > 0) {
+        if (Array.isArray(rawCloudLockets)) {
           const cloudLocketIds = new Set(rawCloudLockets.map((s) => s.id));
           const unsyncedLocalLockets = locketSnapsRef.current.filter(
-            (loc) => !loc.remoteUrl && !cloudLocketIds.has(loc.id),
+            (loc) => loc.id.startsWith('locket_') && !loc.remoteUrl && !cloudLocketIds.has(loc.id),
           );
 
           const mappedCloudLockets: LocketSnapItem[] = rawCloudLockets.map((s) => {
@@ -2023,32 +2023,38 @@ export function useCoupleWorkspace() {
         return next;
       });
 
-      // Đẩy ảnh nhị phân lên S3/Cloudflare R2 + lưu vào PostgreSQL để cài lại app không mất ảnh
-      uploadMediaToCloudAndSaveDb({
-        localUri,
-        category: 'LOCKET_SNAP',
-        mediaType: 'IMAGE',
-        stamp: finalStamp,
-        caption: finalCaption,
-        idempotencyKey: tempId,
-      })
-        .then((savedCloud) => {
-          setLocketSnaps((prev) => {
-            const next = prev.map((s) =>
-              s.id === tempId
-                ? {
-                    ...s,
-                    id: savedCloud.id,
-                    uri: savedCloud.remoteUrl,
-                    remoteUrl: savedCloud.remoteUrl,
-                  }
-                : s,
-            );
-            storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
-            return next;
-          });
-        })
-        .catch(() => null);
+      // KHÓA POLLING TRONG LÚC ĐẨY LÊN S3 & POSTGRESQL
+      cloudPushInFlightRef.current += 1;
+      try {
+        const savedCloud = await uploadMediaToCloudAndSaveDb({
+          localUri,
+          category: 'LOCKET_SNAP',
+          mediaType: 'IMAGE',
+          stamp: finalStamp,
+          caption: finalCaption,
+          idempotencyKey: tempId,
+        });
+
+        setLocketSnaps((prev) => {
+          const next = prev.map((s) =>
+            s.id === tempId
+              ? {
+                  ...s,
+                  id: savedCloud.id, // Đổi từ tempId sang UUID thật của PostgreSQL
+                  uri: savedCloud.remoteUrl,
+                  remoteUrl: savedCloud.remoteUrl,
+                }
+              : s,
+          );
+          storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
+          return next;
+        });
+      } catch (err) {
+        console.error('Lỗi lưu Locket vào Database:', err);
+        Alert.alert('Chưa lưu được lên Server', 'Ảnh Locket chưa đẩy được vào Database, vui lòng kiểm tra kết nối mạng.');
+      } finally {
+        cloudPushInFlightRef.current -= 1;
+      }
 
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       return true;
@@ -2181,31 +2187,38 @@ export function useCoupleWorkspace() {
         return next;
       });
 
-      uploadMediaToCloudAndSaveDb({
-        localUri: uri,
-        category: 'LOCKET_SNAP',
-        mediaType: 'IMAGE',
-        stamp: finalStamp,
-        caption: finalCaption,
-        idempotencyKey: tempId,
-      })
-        .then((savedCloud) => {
-          setLocketSnaps((prev) => {
-            const next = prev.map((s) =>
-              s.id === tempId
-                ? {
-                    ...s,
-                    id: savedCloud.id,
-                    uri: savedCloud.remoteUrl,
-                    remoteUrl: savedCloud.remoteUrl,
-                  }
-                : s,
-            );
-            storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
-            return next;
-          });
-        })
-        .catch(() => null);
+      // ĐỢI LƯU VÀO DATABASE XONG MỚI TRẢ VỀ KẾT QUẢ
+      cloudPushInFlightRef.current += 1;
+      try {
+        const savedCloud = await uploadMediaToCloudAndSaveDb({
+          localUri: uri,
+          category: 'LOCKET_SNAP',
+          mediaType: 'IMAGE',
+          stamp: finalStamp,
+          caption: finalCaption,
+          idempotencyKey: tempId,
+        });
+
+        setLocketSnaps((prev) => {
+          const next = prev.map((s) =>
+            s.id === tempId
+              ? {
+                  ...s,
+                  id: savedCloud.id,
+                  uri: savedCloud.remoteUrl,
+                  remoteUrl: savedCloud.remoteUrl,
+                }
+              : s,
+          );
+          storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
+          return next;
+        });
+      } catch (err) {
+        console.error('Lỗi lưu Locket vào Database:', err);
+        Alert.alert('Chưa lưu được lên Server', 'Không thể lưu ảnh Locket vào Database.');
+      } finally {
+        cloudPushInFlightRef.current -= 1;
+      }
 
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
@@ -2265,12 +2278,22 @@ export function useCoupleWorkspace() {
 
   const deleteLocketSnap = useCallback(
     async (snapId: string) => {
-      setLocketSnaps((prev) => {
-        const next = prev.filter((s) => s.id !== snapId);
-        storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
-        return next;
-      });
-      deleteCloudMediaById(snapId).catch(() => null);
+      // Khóa không cho vòng lặp 4s kéo dữ liệu cũ đè lại trong lúc đang xóa
+      cloudPushInFlightRef.current += 1;
+      try {
+        setLocketSnaps((prev) => {
+          const next = prev.filter((s) => s.id !== snapId);
+          storage.setItem(workspaceKeys.LOCKET, JSON.stringify(next)).catch(() => null);
+          return next;
+        });
+
+        // Chỉ gọi API xóa trên Database nếu ID không phải là ID tạm ở Local
+        if (!snapId.startsWith('locket_')) {
+          await deleteCloudMediaById(snapId);
+        }
+      } finally {
+        cloudPushInFlightRef.current -= 1;
+      }
     },
     [workspaceKeys.LOCKET],
   );
@@ -2781,14 +2804,22 @@ export function useCoupleWorkspace() {
     [currentUserId, socialPrefs.hdMediaUpload, workspaceKeys.MEDIA],
   );
 
-  const deleteMedia = useCallback(
+const deleteMedia = useCallback(
     async (mediaId: string) => {
-      setMediaList((prev) => {
-        const next = prev.filter((m) => m.id !== mediaId);
-        storage.setItem(workspaceKeys.MEDIA, JSON.stringify(next)).catch(() => null);
-        return next;
-      });
-      deleteCloudMediaById(mediaId).catch(() => null);
+      cloudPushInFlightRef.current += 1;
+      try {
+        setMediaList((prev) => {
+          const next = prev.filter((m) => m.id !== mediaId);
+          storage.setItem(workspaceKeys.MEDIA, JSON.stringify(next)).catch(() => null);
+          return next;
+        });
+
+        if (!mediaId.startsWith('media_')) {
+          await deleteCloudMediaById(mediaId);
+        }
+      } finally {
+        cloudPushInFlightRef.current -= 1;
+      }
     },
     [workspaceKeys.MEDIA],
   );

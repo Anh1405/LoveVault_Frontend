@@ -2,6 +2,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { RedesignedAlbumSection } from '../components/home/RedesignedAlbumSection';
 import { DatePlanTicketCard } from '../components/home/DatePlanTicketCard';
+import { useRealtimeDailyQA } from '../hooks/useRealtimeDailyQA';
+import { DailyQASection } from '../components/home/DailyQASection';
 import {
   View,
   Text,
@@ -254,7 +256,20 @@ export const HomeScreen = () => {
     recordGoalMomoTransaction,
     restoreWorkspaceBackup,
   } = useCoupleWorkspace();
-
+  const {
+    activeQA,
+    qaFilter,
+    qaHistory,
+    socketConnected,
+    partnerTypingName,
+    totalQuestionsCount,
+    completedBothCount,
+    notifyTyping,
+    submitAnswer,
+    rollQuestion,
+    selectQuestionFromHistory,
+    refreshQa,
+  } = useRealtimeDailyQA();
   // State quản lý Danh mục Album (Folders)
   const [albumCategories, setAlbumCategories] = useState<string[]>([
     'Kỷ niệm hẹn hò',
@@ -1024,15 +1039,13 @@ export const HomeScreen = () => {
   }, []);
 
   // Chụp Locket: lưu Local trước để hiển thị tức thì, sau đó đẩy thẳng lên S3/R2 + PostgreSQL
-  const handleCapturePhotoUri = useCallback(
+const handleCapturePhotoUri = useCallback(
     async (uri: string, stamp: string, cap: string) => {
       await saveCapturedLocketUri(uri, stamp, cap);
       if (coupleId) {
-        setTimeout(() => {
-          void queryClient.invalidateQueries({
-            queryKey: ['cloudWorkspaceMedia', coupleId],
-          });
-        }, 1500);
+        await queryClient.invalidateQueries({
+          queryKey: ['cloudWorkspaceMedia', coupleId],
+        });
       }
     },
     [saveCapturedLocketUri, coupleId, queryClient],
@@ -1102,11 +1115,12 @@ export const HomeScreen = () => {
   }, [switchHorizontalPage]);
 
   // Xóa Locket ở cả Local + Cache + Supabase Database & S3 Storage
+  // 2. Sửa handleDeleteLocketSnap (khoảng dòng 705) - XÓA lệnh gọi deleteCloudMediaById bị trùng lần 2:
   const handleDeleteLocketSnap = useCallback(
     async (id: string) => {
       const targetSnap = mergedLocketSnaps.find((s) => s.id === id);
-      void deleteLocketSnap(id);
 
+      // 1. Xóa khỏi React Query Cache ngay lập tức
       queryClient.setQueryData(
         ['cloudWorkspaceMedia', coupleId, currentUserId],
         (oldData: any) => {
@@ -1124,21 +1138,24 @@ export const HomeScreen = () => {
         },
       );
 
+      // 2. Cập nhật lại bản backup Local
       const updatedSnaps = mergedLocketSnaps.filter((s) => s.id !== id);
       void restoreWorkspaceBackup({
         mediaList: mergedMediaList,
         locketSnaps: updatedSnaps,
       });
 
-      if (coupleId) {
-        try {
-          await deleteCloudMediaById(id);
+      // 3. Gọi deleteLocketSnap (hàm này đã bao gồm xóa Local + gọi API xóa Database PostgreSQL & S3)
+      try {
+        await deleteLocketSnap(id);
+        if (coupleId) {
           await queryClient.invalidateQueries({
             queryKey: ['cloudWorkspaceMedia', coupleId],
           });
-        } catch (err) {
-          console.warn('Không thể xóa Locket trên Cloud:', err);
         }
+      } catch (err) {
+        console.warn('Không thể xóa Locket trên Cloud:', err);
+        Alert.alert('Lỗi xóa ảnh', 'Chưa xóa được ảnh trên Database, vui lòng thử lại.');
       }
     },
     [
@@ -1152,15 +1169,11 @@ export const HomeScreen = () => {
     ],
   );
 
-  // Xóa ảnh/video Album ở cả Local + Cache + Supabase Database & S3 Storage
+  // 3. Tương tự cho handleDeleteAlbumMedia (khoảng dòng 750) - Tránh gọi deleteCloudMediaById 2 lần:
   const handleDeleteAlbumMedia = useCallback(
     async (id: string) => {
       const targetItem = mergedMediaList.find((m) => m.id === id);
 
-      // 1. Xóa ngay trên UI & Local Storage
-      void deleteMedia(id);
-
-      // 2. Xóa khỏi React Query Cache ngay lập tức để không bị useEffect ghi đè lại
       queryClient.setQueryData(
         ['cloudWorkspaceMedia', coupleId, currentUserId],
         (oldData: any) => {
@@ -1178,23 +1191,21 @@ export const HomeScreen = () => {
         },
       );
 
-      // 3. Cập nhật lại bản backup Local ngay lập tức
       const updatedMedia = mergedMediaList.filter((m) => m.id !== id);
       void restoreWorkspaceBackup({
         mediaList: updatedMedia,
         locketSnaps: mergedLocketSnaps,
       });
 
-      // 4. Gọi API xóa vĩnh viễn trên Supabase Database (coupleMedia + post) & S3 Storage
-      if (coupleId) {
-        try {
-          await deleteCloudMediaById(id);
+      try {
+        await deleteMedia(id); // Đã gọi deleteCloudMediaById bên trong
+        if (coupleId) {
           await queryClient.invalidateQueries({
             queryKey: ['cloudWorkspaceMedia', coupleId],
           });
-        } catch (err) {
-          console.warn('Không thể xóa media trên Cloud:', err);
         }
+      } catch (err) {
+        console.warn('Không thể xóa media trên Cloud:', err);
       }
     },
     [
@@ -2130,219 +2141,24 @@ export const HomeScreen = () => {
               </View>
             )}
 
-            {/* TAB 3: HỎI ĐÁP */}
+            {/* TAB 3: HỎI ĐÁP REALTIME WEBSOCKET */}
             {activeTab === 'DAILY_QA' && (
-              <View style={styles.sectionWrap}>
-                <View style={styles.qaFilterRow}>
-                  {(
-                    [
-                      { id: 'ALL', label: 'Tất cả' },
-                      { id: 'FUNNY', label: 'Vui vẻ' },
-                      { id: 'DEEP', label: 'Tâm sự' },
-                      { id: 'FUTURE', label: 'Tương lai' },
-                    ] as Array<{ id: QuestionCategory; label: string }>
-                  ).map((cat) => {
-                    const selected = qaFilter === cat.id;
-                    return (
-                      <Pressable
-                        key={cat.id}
-                        style={[
-                          styles.qaTopicChip,
-                          {
-                            backgroundColor: selected ? colors.textPrimary : colors.surface,
-                            borderColor: selected ? colors.textPrimary : colors.borderSubtle,
-                          },
-                        ]}
-                        onPress={() => void rollRandomQuestion(cat.id)}
-                      >
-                        <Text
-                          style={{
-                            fontSize: 12,
-                            fontWeight: '600',
-                            color: selected ? colors.surface : colors.textSecondary,
-                          }}
-                        >
-                          {cat.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-
-                <View
-                  style={[
-                    styles.itemCard,
-                    { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
-                  ]}
-                >
-                  <View style={styles.cardTopRow}>
-                    <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textSecondary }}>
-                      Câu hỏi hôm nay
-                    </Text>
-                    <Pressable
-                      style={[styles.randomRollBtn, { backgroundColor: colors.surfaceVariant }]}
-                      onPress={() => void rollRandomQuestion()}
-                    >
-                      <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textPrimary }}>
-                        Đổi câu khác
-                      </Text>
-                    </Pressable>
-                  </View>
-
-                  <Text style={[styles.qaQuestionText, { color: colors.textPrimary }]}>
-                    {dailyQA.questionText}
-                  </Text>
-
-                  {bothAnswered ? (
-                    <View style={{ marginTop: 14 }}>
-                      <View style={[styles.qaBubble, { backgroundColor: colors.surfaceVariant }]}>
-                        <Text
-                          style={{
-                            fontSize: 11,
-                            fontWeight: '700',
-                            color: colors.textSecondary,
-                          }}
-                        >
-                          {myProfile.nickname}
-                        </Text>
-                        <Text style={{ fontSize: 14, color: colors.textPrimary, marginTop: 4 }}>
-                          {dailyQA.myAnswer}
-                        </Text>
-                      </View>
-
-                      <View
-                        style={[
-                          styles.qaBubble,
-                          { backgroundColor: colors.surfaceVariant, marginTop: 8 },
-                        ]}
-                      >
-                        <Text
-                          style={{
-                            fontSize: 11,
-                            fontWeight: '700',
-                            color: colors.textSecondary,
-                          }}
-                        >
-                          {partnerProfile.nickname}
-                        </Text>
-                        <Text style={{ fontSize: 14, color: colors.textPrimary, marginTop: 4 }}>
-                          {dailyQA.partnerAnswer}
-                        </Text>
-                      </View>
-                    </View>
-                  ) : hasMyAnswer ? (
-                    <View style={{ marginTop: 14 }}>
-                      <View style={[styles.qaBubble, { backgroundColor: colors.surfaceVariant }]}>
-                        <Text
-                          style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}
-                        >
-                          Bạn đã gửi câu trả lời
-                        </Text>
-                        <Text
-                          style={{
-                            fontSize: 13,
-                            color: colors.textSecondary,
-                            marginTop: 4,
-                            lineHeight: 19,
-                          }}
-                        >
-                          Đang chờ {partnerProfile.nickname} trả lời. Khi cả hai đã trả lời, câu trả
-                          lời của hai người sẽ hiện ra cùng lúc.
-                        </Text>
-                      </View>
-                    </View>
-                  ) : (
-                    <View style={{ marginTop: 14 }}>
-                      {hasPartnerAnswer && (
-                        <Text
-                          style={{
-                            fontSize: 13,
-                            color: colors.textSecondary,
-                            marginBottom: 8,
-                            lineHeight: 19,
-                          }}
-                        >
-                          {partnerProfile.nickname} đã trả lời rồi. Viết câu trả lời của bạn để xem.
-                        </Text>
-                      )}
-                      <TextInput
-                        style={[
-                          styles.qaInput,
-                          { borderColor: colors.outline, color: colors.textPrimary },
-                        ]}
-                        placeholder="Viết câu trả lời của bạn..."
-                        placeholderTextColor={colors.textSecondary}
-                        value={qaInput}
-                        onChangeText={setQaInput}
-                        editable={!qaSubmitting}
-                      />
-                      {qaError ? (
-                        <Text style={{ fontSize: 12, color: colors.error, marginTop: 8 }}>
-                          {qaError}
-                        </Text>
-                      ) : null}
-                      <Pressable
-                        style={[
-                          styles.addBtn,
-                          {
-                            backgroundColor: colors.primary,
-                            marginTop: 10,
-                            opacity: qaSubmitting || !qaInput.trim() ? 0.5 : 1,
-                          },
-                        ]}
-                        disabled={qaSubmitting || !qaInput.trim()}
-                        onPress={() => void handleSubmitDailyAnswer()}
-                      >
-                        <Text style={styles.addBtnText}>
-                          {qaSubmitting ? 'Đang gửi...' : 'Gửi câu trả lời'}
-                        </Text>
-                      </Pressable>
-                    </View>
-                  )}
-                </View>
-
-                {qaHistory.length > 0 && (
-                  <View style={{ marginTop: 8 }}>
-                    <Text
-                      style={[
-                        styles.sectionTitle,
-                        { color: colors.textPrimary, marginBottom: 10 },
-                      ]}
-                    >
-                      Đã trả lời ({qaHistory.length})
-                    </Text>
-                    {qaHistory.map((hist) => (
-                      <View
-                        key={hist.questionId}
-                        style={[
-                          styles.itemCard,
-                          { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
-                        ]}
-                      >
-                        <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>
-                          {hist.questionText}
-                        </Text>
-                        {hist.myAnswer?.trim() && hist.partnerAnswer?.trim() ? (
-                          <>
-                            <Text style={{ fontSize: 12, color: colors.textPrimary, marginTop: 6 }}>
-                              {myProfile.nickname}: {hist.myAnswer}
-                            </Text>
-                            <Text
-                              style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}
-                            >
-                              {partnerProfile.nickname}: {hist.partnerAnswer}
-                            </Text>
-                          </>
-                        ) : (
-                          <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 6 }}>
-                            Đang chờ cả hai cùng trả lời để hiện câu trả lời.
-                          </Text>
-                        )}
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </View>
+              <DailyQASection
+                colors={colors}
+                myNickname={myProfile.nickname}
+                partnerNickname={partnerProfile.nickname}
+                activeQA={activeQA}
+                qaFilter={qaFilter}
+                qaHistory={qaHistory}
+                socketConnected={socketConnected}
+                partnerTypingName={partnerTypingName}
+                totalQuestionsCount={totalQuestionsCount}
+                completedBothCount={completedBothCount}
+                onTyping={notifyTyping}
+                onSubmitAnswer={submitAnswer}
+                onRollQuestion={rollQuestion}
+                onSelectHistoryItem={selectQuestionFromHistory}
+              />
             )}
 
             {/* TAB 4: ALBUM ẢNH & VIDEO CÓ DANH MỤC & NÚT THÊM NHANH */}
