@@ -21,6 +21,52 @@ const RAW_BASE_URL =
     process.env.EXPO_PUBLIC_API_URL || 'https://lovevault-appmoblie.onrender.com';
 const SOCKET_BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
 
+// Chuẩn hóa mọi reaction (chuỗi cũ, object từ server, dữ liệu cache lỗi) về dạng object
+// với emoji / userId luôn là chuỗi. Tránh lỗi "n.replace is not a function" trong summarizeReactions.
+const sanitizeReactions = (raw: unknown): any[] => {
+    if (!Array.isArray(raw)) return [];
+    const result: any[] = [];
+    raw.forEach((r: any, idx: number) => {
+        if (r === null || r === undefined) return;
+
+        if (typeof r === 'string' || typeof r === 'number') {
+            const emoji = String(r).trim();
+            if (!emoji) return;
+            result.push({
+                id: `legacy_${idx}_${emoji}`,
+                userId: '',
+                emoji,
+                createdAt: new Date(0).toISOString(),
+            });
+            return;
+        }
+
+        if (typeof r === 'object') {
+            const rawEmoji = r.emoji ?? r.reaction ?? r.type ?? '';
+            const emoji = typeof rawEmoji === 'string' ? rawEmoji.trim() : '';
+            if (!emoji) return;
+            const rawUserId = r.userId ?? r.user_id ?? r.uploaderId ?? '';
+            const userId =
+                typeof rawUserId === 'string' || typeof rawUserId === 'number'
+                    ? String(rawUserId)
+                    : '';
+            result.push({
+                ...r,
+                id: String(r.id ?? `${userId}_${emoji}_${idx}`),
+                userId,
+                emoji,
+                createdAt:
+                    typeof r.createdAt === 'string'
+                        ? r.createdAt
+                        : r.createdAt
+                            ? new Date(r.createdAt).toISOString()
+                            : new Date(0).toISOString(),
+            });
+        }
+    });
+    return result;
+};
+
 const sameSnapList = (a: LocketSnapView[], b: LocketSnapView[]) => {
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
@@ -93,7 +139,7 @@ export function useRealtimeLocket() {
                 stampBadge: s.stamp || s.stampBadge || '💕 Đang nhớ đằng ấy',
                 caption: s.caption || '',
                 createdAtTime,
-                reactions: Array.isArray(s.reactions) ? s.reactions : [],
+                reactions: sanitizeReactions(s.reactions),
             } as unknown as LocketSnapView;
         },
         [currentUserId, myProfile.nickname, partnerProfile.nickname],
@@ -263,17 +309,19 @@ export function useRealtimeLocket() {
                         const next = prev.map((s) => {
                             if (s.id !== payload.snapId) return s;
                             const currentReactions = Array.isArray(s.reactions) ? s.reactions : [];
-                            const updatedReactions = Array.isArray(payload.reactions)
-                                ? payload.reactions
-                                : [
-                                    ...currentReactions,
-                                    {
-                                        id: `${payload.userId}_${Date.now()}`,
-                                        userId: payload.userId,
-                                        emoji: payload.emoji,
-                                        createdAt: new Date().toISOString(),
-                                    },
-                                ];
+                            const updatedReactions = sanitizeReactions(
+                                Array.isArray(payload.reactions)
+                                    ? payload.reactions
+                                    : [
+                                        ...currentReactions,
+                                        {
+                                            id: `${payload.userId}_${Date.now()}`,
+                                            userId: payload.userId,
+                                            emoji: payload.emoji,
+                                            createdAt: new Date().toISOString(),
+                                        },
+                                    ],
+                            );
                             return { ...s, reactions: updatedReactions };
                         });
                         void storage.setItem(cacheKey, JSON.stringify(next));
@@ -467,7 +515,7 @@ export function useRealtimeLocket() {
                         return String(r.userId) !== String(currentUserId) || r.emoji !== emoji;
                     });
 
-                    return { ...s, reactions: [...filtered, newReactionObj] };
+                    return { ...s, reactions: sanitizeReactions([...filtered, newReactionObj]) };
                 });
                 void storage.setItem(cacheKey, JSON.stringify(next));
                 return next;
