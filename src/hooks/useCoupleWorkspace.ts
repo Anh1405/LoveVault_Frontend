@@ -1766,7 +1766,7 @@ export function useCoupleWorkspace() {
       const myBdayEventId = `auto_bday_${currentUserId}`;
       if (myProfile.birthDate) {
         const idx = nextList.findIndex((e) => e.id === myBdayEventId);
-        if (idx === -1) {
+        if (idx === -1 && !tombsRef.current.events[myBdayEventId]) {
           changed = true;
           nextList.push({
             id: myBdayEventId,
@@ -1801,7 +1801,7 @@ export function useCoupleWorkspace() {
       const partnerBdayEventId = `auto_bday_${partnerKey}`;
       if (partnerProfile.birthDate) {
         const idx = nextList.findIndex((e) => e.id === partnerBdayEventId);
-        if (idx === -1) {
+        if (idx === -1 && !tombsRef.current.events[partnerBdayEventId]) {
           changed = true;
           nextList.push({
             id: partnerBdayEventId,
@@ -1833,8 +1833,10 @@ export function useCoupleWorkspace() {
       }
 
       if (changed) {
-        storage.setItem(workspaceKeys.EVENTS, JSON.stringify(nextList)).catch(() => null);
-        return nextList;
+        const stamped = finalizeList('events', prev, nextList);
+        storage.setItem(workspaceKeys.EVENTS, JSON.stringify(stamped)).catch(() => null);
+        void syncRoomSnapshotToCloud({ events: stamped });
+        return stamped;
       }
       return prev;
     });
@@ -1847,6 +1849,9 @@ export function useCoupleWorkspace() {
     partnerProfile.birthDate,
     partnerProfile.nickname,
     workspaceKeys.EVENTS,
+    events.length,
+    finalizeList,
+    syncRoomSnapshotToCloud,
   ]);
 
   const runDailyAutoAiRefresh = useCallback(async () => {
