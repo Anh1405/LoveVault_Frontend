@@ -455,16 +455,17 @@ export const HomeScreen = () => {
   useEffect(() => {
     if (!cloudMediaPayload || uploadingMedia) return;
     const hasCloudAlbum =
-      Array.isArray(cloudMediaPayload.albumMedia) && cloudMediaPayload.albumMedia.length > 0;
+        Array.isArray(cloudMediaPayload.albumMedia) && cloudMediaPayload.albumMedia.length > 0;
     const hasCloudLocket =
-      Array.isArray(cloudMediaPayload.locketSnaps) && cloudMediaPayload.locketSnaps.length > 0;
+        Array.isArray(cloudMediaPayload.locketSnaps) && cloudMediaPayload.locketSnaps.length > 0;
 
     if (
-      (hasCloudAlbum && mergedMediaList.length > mediaList.length) ||
-      (hasCloudLocket && mergedLocketSnaps.length > locketSnaps.length)
+        (hasCloudAlbum && mergedMediaList.length > mediaList.length) ||
+        (hasCloudLocket && cloudMediaPayload.locketSnaps.length > mergedLocketSnaps.length)
     ) {
       void restoreWorkspaceBackup({
         mediaList: mergedMediaList,
+        locketSnaps: mergedLocketSnaps,
       });
     }
   }, [
@@ -473,7 +474,6 @@ export const HomeScreen = () => {
     mergedMediaList,
     mergedLocketSnaps,
     mediaList.length,
-    locketSnaps.length,
     restoreWorkspaceBackup,
   ]);
 
