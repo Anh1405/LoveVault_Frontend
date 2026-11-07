@@ -469,10 +469,35 @@ export function useRealtimeLocket() {
             });
 
             if (!String(snapId).startsWith('locket_')) {
+                // Khóa vòng đồng bộ 2 giây trong lúc đang gửi, tránh bị kéo dữ liệu cũ đè lại số vừa tăng
+                mutationInFlightRef.current += 1;
                 try {
                     const res = await api.post(`/api/v1/media/${snapId}/reactions`, {
                         emoji,
                     });
+
+                    // Dùng danh sách từ server làm chuẩn; không thu nhỏ nếu còn lượt bấm khác đang chờ phản hồi
+                    const serverReactions = Array.isArray(res.data?.reactions)
+                        ? sanitizeReactions(res.data.reactions)
+                        : null;
+                    if (serverReactions) {
+                        setLocketSnaps((prev) => {
+                            const next = prev.map((s) => {
+                                if (s.id !== snapId) return s;
+                                const current = sanitizeReactions(s.reactions);
+                                return {
+                                    ...s,
+                                    reactions:
+                                        serverReactions.length >= current.length
+                                            ? serverReactions
+                                            : current,
+                                };
+                            });
+                            void storage.setItem(cacheKey, JSON.stringify(next));
+                            return next;
+                        });
+                    }
+
                     if (socketRef.current?.connected) {
                         socketRef.current.emit('locket:react_snap', {
                             snapId,
@@ -480,7 +505,11 @@ export function useRealtimeLocket() {
                             reactions: res.data?.reactions,
                         });
                     }
-                } catch {}
+                } catch {
+                    // Mất mạng: giữ số đã tăng trên máy, vòng đồng bộ sau sẽ cập nhật lại theo server
+                } finally {
+                    mutationInFlightRef.current -= 1;
+                }
             }
         },
         [currentUserId, cacheKey],
