@@ -1048,8 +1048,9 @@ export const HomeScreen = () => {
 
         if (coupleId) {
           const refreshed = await refetchCloudMedia();
-          const newestCloud = refreshed.data?.albumMedia?.find(
-              (m) => m.caption !== 'thumbnail' && m.caption !== 'Hero Wallpaper',
+          const albumList = refreshed.data?.albumMedia || [];
+          const newestCloud = albumList.find(
+              (m) => m.caption !== 'thumbnail' && m.caption !== 'Hero Wallpaper'
           );
           if (activeCat && newestCloud && !prevIds.has(newestCloud.id)) {
             await assignMediaToCategory(newestCloud.id, activeCat, newestCloud.remoteUrl);

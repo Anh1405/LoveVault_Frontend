@@ -2380,8 +2380,8 @@ export function useCoupleWorkspace() {
         const finalPool = candidates.length > 0 ? candidates : pool;
         const picked = finalPool[Math.floor(Math.random() * finalPool.length)];
 
-        const existingAnswered = qaHistory.find((h) => h.questionId === picked.id);
-
+        const safeQaHistory = Array.isArray(qaHistory) ? qaHistory : [];
+        const existingAnswered = safeQaHistory.find((h) => h.questionId === picked.id);
         const nextQA: DailyQAItem = existingAnswered || {
           questionId: picked.id,
           category: picked.category,
