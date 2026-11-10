@@ -1,418 +1,159 @@
+// src/screens/HomeScreen.tsx
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useRealtimeLocket } from '../hooks/useRealtimeLocket';
+import { RedesignedAlbumSection } from '../components/home/RedesignedAlbumSection';
+import { DatePlanTicketCard } from '../components/home/DatePlanTicketCard';
+import { useRealtimeDailyQA } from '../hooks/useRealtimeDailyQA';
+import { DailyQASection } from '../components/home/DailyQASection';
+import {
+    View,
+    Text,
+    StyleSheet,
+    StatusBar,
+    ScrollView,
+    Pressable,
+    TextInput,
+    Modal,
+    Platform,
+    RefreshControl,
+    Alert,
+    FlatList,
+    Image,
+    ActivityIndicator,
+    NativeSyntheticEvent,
+    NativeScrollEvent,
+    Animated,
+    LayoutChangeEvent,
+    useColorScheme,
+    useWindowDimensions,
+    Linking,
+    AppState,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Image as ExpoImage } from 'expo-image';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as MediaLibrary from 'expo-media-library/legacy';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { api } from '../services/api';
+import { storage } from '../services/storage';
+import {
+    flushPendingCloudMediaQueue,
+    fetchCloudWorkspaceMedia,
+} from '../services/cloudMediaService';
+import { useAuthStore } from '../store/useAuthStore';
+import { useSettingsStore } from '../store/useSettingsStore';
+import { getThemeColors, METRICS } from '../constants/theme';
+import { LocketCameraCard, LocketStampItem } from '../components/home/LocketCameraCard';
+import { LocketSnapCard } from '../components/home/LocketSnapCard';
+import { LocketReactionSheet } from '../components/home/LocketReactionSheet';
+import type { LocketSnapView } from '../components/home/locketReactions';
+import {
+    useCoupleWorkspace,
+    ImportantEvent,
+    CoupleGoalItem,
+    CoupleMediaItem,
+    computeDaysUntilNextOccurrence,
+    parseMomoTransactionText,
+} from '../hooks/useCoupleWorkspace';
+import { CoupleHeroCard } from '../components/home/CoupleHeroCard';
+import {
+    ProfileModal,
+    SettingsModal,
+    EventAndGoalFormModal,
+} from '../components/home/ModalsAndSheets';
 
-Thư viện
-Đã lên lịch
-Sinh viên
+type DashboardSection = 'EVENTS' | 'GOALS' | 'DAILY_QA' | 'MEDIA';
 
-Hiện thêm
-Sổ ghi chú mới
-Học tập
-English for IT Teacher's Guide: Working in IT
-Khắc phục ảnh bể và dung lượng Supabase
-Đồng bộ dữ liệu thời gian thực
-Khắc phục lỗi giới hạn 3 Locket
-Quản Lý Khoản Vay
-Đội Trưởng Tài Ba Và 23 Cộng Sự
-Khắc phục lỗi đồng bộ media
-Tín phiếu là gì và đặc điểm
-Việt Nam Sau Tháng 8/1945
-tui cân thiết kế lại để tự động phù hợp với mọi thiết bị
-Báo cáo Dinh Vạn Thủy Tú
-Hướng dẫn đồng bộ Locket Database
-Thiết Kế Sơ Đồ Mạch Admin
-Chinh Phục Điểm 10 Kinh Tế Pháp Luật
-Khắc phục lỗi trùng lặp dữ liệu hồ sơ
-Khắc phục lỗi đồng bộ profile
-Chỉnh sửa Camera LoveVault góc 0.5x
-Phân tích hồi quy tuyến tính
-Tư vấn Luật Phá sản
-Sửa lỗi ProfileModal và ngày sinh
-Cập nhật đồng bộ Profile và Hình nền
-Đánh giá slide Hoạt động và Giao tiếp
-Bài tập Luật Phục hồi và Phá sản
-Trò Chuyện Cùng Sử Gia
-Giải đáp Câu 38 lịch sử
-Hướng Dẫn Giải Bài Tập
-Cập nhật Layout cho Index
-Hãy đóng vai một Senior Frontend Developer & UI/UX Designer chuyên thiết kế Landing Page sản phẩm cô
-Chuyển Database lên Supabase
-Lưu Trữ Dữ Liệu Lên Cloud
-bạn dùng hết khả năng của bạn để tích hợp tìm kiếm tuyến xe buýt ở sài gòn để đi tới địa điểm cần tớ
-Tỷ lệ xét duyệt đơn cụ thể
-Quyền nộp đơn và thủ tục phục hồi doanh nghiệp
-Hướng dẫn chia nhỏ file ModalsAndSheets.tsx thành cấu trúc 5 file Dựa trên cấu trúc đã chuẩn bị ở trên, dưới đây
-Tối ưu hóa UI Lập kế hoạch đi chơi (Sơ đồ chặng dọc hiện đại, Quản lý Giờ về & Nhắc nhở
-Kiến trúc cung điện triều Nguyễn
-Nội dung chi tiết slide
-Khái niệm và đặc điểm tín ngưỡng
-Trò chuyện với Gemini
-ủa tại sao nhật kí locket nó chỉ hiện có 3 cái thôi vậy nhỉ
+export type AlbumMediaWithCategory = CoupleMediaItem & {
+    albumCategory?: string;
+};
 
-Trong 2 file bạn vừa đính kèm (LocketCameraCard.tsx và LocketSnapCard.tsx), không có đoạn code nào giới hạn số lượng bài đăng trong Nhật ký Locket xuống còn 3 cái — vì LocketSnapCard.tsx chỉ đảm nhiệm hiển thị cho 1 thẻ ảnh đơn lẻ, còn việc lặp danh sách (map hoặc FlatList) nằm ở màn hình cha.
-    LocketCameraCard.tsx
-+ 1
+const CONTENT_MAX_WIDTH = 680;
 
-Tuy nhiên, có 2 khả năng chính dẫn đến việc chỉ hiện 3 cái:
+const toLocalIsoDate = (date: Date) => {
+    const safe = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date();
+    return `${safe.getFullYear()}-${String(safe.getMonth() + 1).padStart(2, '0')}-${String(
+        safe.getDate(),
+    ).padStart(2, '0')}`;
+};
 
-    1. Nếu bạn đang nói về 3 bài đăng (ảnh) trong Nhật ký Locket
-Giới hạn này nằm ở màn hình cha (ví dụ: HomeScreen.tsx, LocketScreen.tsx, hoặc trong store quản lý danh sách ảnh). Rất có thể ở file cha đang có một đoạn cắt mảng tương tự như:
+const normalizeIsoDate = (value?: string | null): string | null => {
+    if (!value || typeof value !== 'string') return null;
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+    return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+};
 
-    snaps.slice(0, 3).map(...) (chỉ lấy 3 ảnh mới nhất để hiển thị rút gọn trên trang chủ).
+const isValidDate = (d: unknown): d is Date =>
+    d instanceof Date && !Number.isNaN(d.getTime());
 
-Hoặc hàm lấy dữ liệu từ store/database đang đặt limit(3) hoặc khởi tạo sẵn 3 dữ liệu mẫu (mock data).
+const getAnniversaryCacheKey = (coupleId?: string | null, userId?: string | null) =>
+    `lovevault_anniversary_override_v2_${coupleId || userId || 'guest'}`;
 
-2. Nếu bạn đang nói về 3 chip cảm xúc (reaction) trên mỗi ảnh
-Ngay trong file LocketSnapCard.tsx (dòng 30–36), số lượng loại cảm xúc hiển thị trên thẻ đang bị cắt bằng hàm slice dựa theo chiều rộng màn hình:
+const ALBUM_CATEGORIES_STORAGE_KEY = (coupleId?: string | null, userId?: string | null) =>
+    `lovevault_album_categories_v1_${coupleId || userId || 'guest'}`;
 
-    TypeScript
-const maxVisibleChips = getResponsiveMaxVisibleChips(screenWidth);
-// ...
-const visibleChips = summary.slice(0, maxVisibleChips);
-const hiddenKinds = summary.length - visibleChips.length;
-Hàm getResponsiveMaxVisibleChips(screenWidth) trong file ./locketReactions rất có thể đang trả về 3 trên kích thước màn hình điện thoại thông thường, và các cảm xúc dư ra sẽ bị gom vào chữ +....
-LocketSnapCard.tsx
+const ALBUM_ITEM_CATEGORY_MAP_KEY = (coupleId?: string | null, userId?: string | null) =>
+    `lovevault_album_item_cat_map_v1_${coupleId || userId || 'guest'}`;
 
-Bạn gửi thêm file màn hình cha (nơi gọi <LocketSnapCard/> và chứa chữ "Nhật ký Locket") hoặc file locketReactions.ts lên nhé, mình sẽ chỉ chính xác dòng đang giới hạn và sửa lại giúp bạn!
+const COUPLE_LOCKET_STAMPS: LocketStampItem[] = [
+    { id: '1', icon: '💕', label: 'Đang nhớ đằng ấy' },
+    { id: '2', icon: '🍕', label: 'Báo cáo bữa ăn' },
+    { id: '3', icon: '👀', label: 'Góc nhìn hiện tại' },
+    { id: '4', icon: '🧋', label: 'Thèm trà sữa' },
+    { id: '5', icon: '💻', label: 'Đang làm việc' },
+    { id: '6', icon: '😴', label: 'Chuẩn bị đi ngủ' },
+];
 
-kiểm tra thử tui có 5 cái locket nhưng chỉ xuất hiện 3 cái mới nhất
+const PAGE_LABELS = ['Locket', 'Không gian'] as const;
+const PAGE_SWITCH_PADDING = 3;
 
-Thủ phạm làm cho danh sách chỉ hiện đúng 3 cái mới nhất nằm ở hai điểm trong file HomeScreen.tsx (kết hợp với hook useRealtimeLocket):
-HomeScreen.tsx
+const EMPTY_LIST: never[] = [];
 
-1. Thủ phạm trực tiếp trên giao diện: initialNumToRender={3} của FlatList
-Trong HomeScreen.tsx (khoảng dòng 817–830), danh sách Locket đang được cấu hình FlatList như sau:
-    HomeScreen.tsx
+const locketSnapKeyExtractor = (snap: { id: string }) => snap.id;
 
-TypeScript
-<FlatList
-data={mergedLocketSnaps}
-keyExtractor={locketSnapKeyExtractor}
-renderItem={renderLocketSnap}
-...
-initialNumToRender={3}
-maxToRenderPerBatch={4}
-windowSize={5}
-Khi đặt initialNumToRender={3} bên trong một khung Pager ngang (Animated.ScrollView), đặc biệt là trên React Native Web hoặc khi chiều cao của khung chứa chưa tính toán kịp lúc mount, FlatList sẽ chỉ render đúng 3 phần tử đầu tiên (3 ảnh mới nhất) và không kích hoạt sự kiện onEndReached / virtualized scroll để vẽ tiếp ảnh thứ 4, thứ 5 khi bạn cuộn.
-    HomeScreen.tsx
+const downloadMediaOnWeb = async (mediaItem: CoupleMediaItem) => {
+    const url = mediaItem.remoteUrl || mediaItem.uri;
+    const ext = mediaItem.mediaType === 'VIDEO' ? 'mp4' : 'jpg';
+    try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = `lovevault_${Date.now()}.${ext}`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
+    } catch (error) {
+        console.warn('Tải trực tiếp thất bại (thường do CORS), mở tab mới:', error);
+        window.open(url, '_blank', 'noopener');
+    }
+};
 
-Cách sửa ngay trong HomeScreen.tsx:
-
-Tìm đến đoạn <FlatList data={mergedLocketSnaps} ... (dòng 817) và tăng initialNumToRender lên 15 hoặc 20 (kèm thêm style={{ flex: 1 }} để đảm bảo FlatList nhận diện đúng vùng cuộn):
-HomeScreen.tsx
-
-TypeScript
-<FlatList ### && (...)` (3)`:** (5)` (Ngoài (`.slice(0, (`src/hooks/useRealtimeLocket.ts`) ({mergedLocketSnaps.length}) * **Trường --- 1 100% 12 2. 3 3)`) 367–385 3]. 5[cite: A B Chắc Chỉ Kiểm Locket Nghĩa Nhật Nếu Trên ]} `(3)` `(5)`, `FlatList` `HomeScreen.tsx`, `HomeScreen.tsx`[cite: `Nhật ``` ```tsx `cloudMediaPayload.locketSnaps`, `initialNumToRender="{3}`" `mergedLocketSnaps` `restoreWorkspaceBackup({ `src/hooks/useRealtimeLocket.ts` `useCoupleWorkspace.ts` `useEffect` `useRealtimeLocket` automaticallyAdjustKeyboardInsets backup)[cite: bên bạn bản bị chắn chỉ chữ contentContainerStyle="{[" cái có cả cần cắt của data="{mergedLocketSnaps}" diện do dòng dòng: dưới file flex: ghi giao giới gọi gỡ gửi hiện hook hoặc hạn hợp initialNumToRender="{15}" isSmallScreen keyExtractor="{locketSnapKeyExtractor}" keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" khi ký locketSnaps: là lên lại lấy lọc maxToRenderPerBatch="{10}" mergedLocketSnaps mình mảng mấy? mục nhé! nhưng nên nó nếu nốt paddingHorizontal: phía ra, renderItem="{renderLocketSnap}" showsVerticalScrollIndicator="{false}" style="{{" styles.scrollContent, sẽ số sửa thay thêm thì thấy tiêu tra trong truyền trên. trùng trước trả từ vào vì về windowSize="{10}" xem { })` }, }} đang đây đã đè đó đề để đủ ảnh:** ở —>
-    tui muốn nó hiện hết mà số lượng nhật kí có luôn thì sao
-
-    Để hiện tất cả số lượng nhật ký Locket hiện có mà không bị giới hạn ở con số 3, bạn có 2 cách sửa trực tiếp trong file HomeScreen.tsx (tại khu vực PAGE 0: LOCKET, khoảng dòng 816–888).
-    HomeScreen.tsx
-
-    Cách 1: Truyền thẳng mergedLocketSnaps.length vào FlatList (Nhanh nhất)
-    Thay vì để initialNumToRender={3} cố định, bạn cho nó bằng đúng tổng số lượng ảnh đang có (mergedLocketSnaps.length). Khi đó có bao nhiêu ảnh nó sẽ vẽ ra hết bấy nhiêu ngay lập tức:
-        HomeScreen.tsx
-
-    Tìm đoạn <FlatList ở khoảng dòng 817 trong HomeScreen.tsx và sửa lại 3 dòng cấu hình render như sau:
-        HomeScreen.tsx
-
-    TypeScript
-    {/* PAGE 0: LOCKET */}
-    <View style={pageStyle}>
-        <FlatList
-            style={{ flex: 1 }} // Thêm dòng này để khung cuộn chiếm trọn chiều cao trang
-            data={mergedLocketSnaps}
-            keyExtractor={locketSnapKeyExtractor}
-            renderItem={renderLocketSnap}
-            contentContainerStyle={[
-                styles.scrollContent,
-                isSmallScreen && { paddingHorizontal: 12 },
-            ]}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
-            automaticallyAdjustKeyboardInsets
-            initialNumToRender={Math.max(10, mergedLocketSnaps.length)}
-            maxToRenderPerBatch={Math.max(10, mergedLocketSnaps.length)}
-            windowSize={21}
-            removeClippedSubviews={false}
-            Cách 2: Đổi sang ScrollView + .map() (Đảm bảo 100% hiện hết trên cả Web & Mobile)
-        Nếu bạn chạy trên Web (Safari / Chrome) hoặc trong khung Pager ngang, FlatList đôi khi vẫn tự ẩn bớt các phần tử nằm dưới màn hình. Nếu muốn chắc chắn 100% có bao nhiêu hiện hết bấy nhiêu (giống hệt cách bạn đang làm ở trang Lịch hẹn và Mục tiêu bên cạnh), bạn thay <FlatList .../> ở dòng 817–888 bằng <ScrollView> + mergedLocketSnaps.map(...) như sau:
-        HomeScreen.tsx
-
-        TypeScript
-        {/* PAGE 0: LOCKET */}
-        <View style={pageStyle}>
-            <ScrollView
-                style={{ flex: 1 }}
-                nestedScrollEnabled
-                contentContainerStyle={[
-                    styles.scrollContent,
-                    isSmallScreen && { paddingHorizontal: 12 },
-                ]}
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode="on-drag"
-                automaticallyAdjustKeyboardInsets
-                refreshControl={
-                    <RefreshControl
-                        refreshing={refreshing}
-                        onRefresh={onRefresh}
-                        tintColor={colors.primary}
-                    />
-                }
-            >
-                <View style={styles.centeredSection}>
-                    <LocketCameraCard
-                        colors={colors}
-                        isPageActive={currentPage === 0}
-                        stamps={COUPLE_LOCKET_STAMPS}
-                        onCapturePhotoUri={handleCapturePhotoUri}
-                        onPickFromGallery={handlePickFromGallery}
-                        onSwipeToDashboard={handleSwipeToDashboard}
-                        onPagerLockChange={handlePagerLock}
-                    />
-
-                    <View style={styles.sectionHeaderRow}>
-                        <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
-                            Nhật ký Locket ({mergedLocketSnaps.length})
-                        </Text>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                            <View
-                                style={{
-                                    width: 8,
-                                    height: 8,
-                                    borderRadius: 4,
-                                    backgroundColor: locketLive ? '#10B981' : '#F59E0B',
-                                }}
-                            />
-                            <Text
-                                style={{
-                                    fontSize: 12,
-                                    fontWeight: '700',
-                                    color: colors.textSecondary,
-                                }}
-                            >
-                                {locketLive ? 'Đồng bộ tức thì (Live)' : 'Đang kết nối...'}
-                            </Text>
-                        </View>
-                    </View>
-
-                    {mergedLocketSnaps.length === 0 ? (
-                        <View
-                            style={[
-                                styles.emptyCard,
-                                { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
-                            ]}
-                        >
-                            <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>
-                                Chưa có ảnh Locket
-                            </Text>
-                            <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: 'center' }}>
-                                Chụp trực tiếp từ khung ngắm phía trên để gửi khoảnh khắc kèm trạng thái.
-                            </Text>
-                        </View>
-                    ) : (
-                        mergedLocketSnaps.map((item) => (
-                            <LocketSnapCard
-                                key={item.id}
-                                snap={item}
-                                colors={colors}
-                                viewerId={currentUserId}
-                                onDelete={handleDeleteLocketSnap}
-                                onReact={handleReactLocketSnap}
-                                onOpenReactions={setReactionSnapId}
-                            />
-                        ))
-                    )}
-                </View>
-            </ScrollView>
-        </View>
-        Lưu ý thêm nếu tiêu đề vẫn ghi Nhật ký Locket (3)
-        Nếu sau khi sửa trên giao diện mà dòng chữ tiêu đề Nhật ký Locket ({mergedLocketSnaps.length}) vẫn báo là (3) thay vì (5), tức là dữ liệu từ useRealtimeLocket đang bị cắt hoặc lọc trước khi truyền vào HomeScreen:
-        HomeScreen.tsx
-
-        Dòng 377–380 trong HomeScreen.tsx: Khi đồng bộ từ Cloud về, HomeScreen đang truyền locketSnaps: mergedLocketSnaps (mảng cũ chỉ có 3 cái) đè ngược vào restoreWorkspaceBackup thay vì gộp chung với cloudMediaPayload.locketSnaps.
-        HomeScreen.tsx
-
-        Trong file src/hooks/useRealtimeLocket.ts: Có thể đang giới hạn số lượng khi fetch API/LocalStorage. Bạn có thể gửi thêm file useRealtimeLocket.ts lên nếu số đếm trong ngoặc (...) vẫn chưa nhảy lên 5 nhé!
-
-        thay cách 2 và sửa gửi lại file cho tôi đi
-
-        Your TSX file is ready
-
-        Biểu tượng TSX
-        HomeScreen
-        TSX
-        Mình đã cập nhật lại file HomeScreen.tsx theo Cách 2 kèm xử lý gộp dữ liệu Cloud để không bị sót ảnh nào:
-
-        Thay FlatList bằng ScrollView + mergedLocketSnaps.map(...) ở trang Locket (Page 0): Bỏ giới hạn initialNumToRender={3} cũ, đảm bảo có bao nhiêu bài đăng Nhật ký Locket sẽ hiển thị đầy đủ 100% bấy nhiêu trên cả Web lẫn Mobile.
-
-        Gộp đầy đủ locketSnaps từ Cloud (cloudMediaPayload.locketSnaps) với useRealtimeLocket(): Nếu có bài đăng Locket nằm trên Cloud mà chưa có trong danh sách local/realtime, hệ thống sẽ tự động gộp vào mergedLocketSnaps (loại trừ trùng lặp theo id và uri) để đủ toàn bộ 5 ảnh của bạn.
-        HomeScreen.tsx
-
-
-
-
-
-
-
-        Gemini là một AI và có thể mắc sai sót.
-
-        Processed and analyzed in code
-        // src/screens/HomeScreen.tsx
-        import React, { useState, useEffect, useCallback, useRef } from 'react';
-        import { useRealtimeLocket } from '../hooks/useRealtimeLocket';
-        import { RedesignedAlbumSection } from '../components/home/RedesignedAlbumSection';
-        import { DatePlanTicketCard } from '../components/home/DatePlanTicketCard';
-        import { useRealtimeDailyQA } from '../hooks/useRealtimeDailyQA';
-        import { DailyQASection } from '../components/home/DailyQASection';
-        import {
-            View,
-            Text,
-            StyleSheet,
-            StatusBar,
-            ScrollView,
-            Pressable,
-            TextInput,
-            Modal,
-            Platform,
-            RefreshControl,
-            Alert,
-            FlatList,
-            Image,
-            ActivityIndicator,
-            NativeSyntheticEvent,
-            NativeScrollEvent,
-            Animated,
-            LayoutChangeEvent,
-            useColorScheme,
-            useWindowDimensions,
-            Linking,
-            AppState,
-        } from 'react-native';
-        import { useSafeAreaInsets } from 'react-native-safe-area-context';
-        import { Image as ExpoImage } from 'expo-image';
-        import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
-        import { useVideoPlayer, VideoView } from 'expo-video';
-        import * as Haptics from 'expo-haptics';
-        import * as Clipboard from 'expo-clipboard';
-        import * as FileSystem from 'expo-file-system/legacy';
-        import * as MediaLibrary from 'expo-media-library/legacy';
-        import { useQuery, useQueryClient } from '@tanstack/react-query';
-        import { api } from '../services/api';
-        import { storage } from '../services/storage';
-        import {
-            flushPendingCloudMediaQueue,
-            fetchCloudWorkspaceMedia,
-        } from '../services/cloudMediaService';
-        import { useAuthStore } from '../store/useAuthStore';
-        import { useSettingsStore } from '../store/useSettingsStore';
-        import { getThemeColors, METRICS } from '../constants/theme';
-        import { LocketCameraCard, LocketStampItem } from '../components/home/LocketCameraCard';
-        import { LocketSnapCard } from '../components/home/LocketSnapCard';
-        import { LocketReactionSheet } from '../components/home/LocketReactionSheet';
-        import type { LocketSnapView } from '../components/home/locketReactions';
-        import {
-            useCoupleWorkspace,
-            ImportantEvent,
-            CoupleGoalItem,
-            CoupleMediaItem,
-            computeDaysUntilNextOccurrence,
-            parseMomoTransactionText,
-        } from '../hooks/useCoupleWorkspace';
-        import { CoupleHeroCard } from '../components/home/CoupleHeroCard';
-        import {
-            ProfileModal,
-            SettingsModal,
-            EventAndGoalFormModal,
-        } from '../components/home/ModalsAndSheets';
-
-        type DashboardSection = 'EVENTS' | 'GOALS' | 'DAILY_QA' | 'MEDIA';
-
-        export type AlbumMediaWithCategory = CoupleMediaItem & {
-            albumCategory?: string;
-        };
-
-        const CONTENT_MAX_WIDTH = 680;
-
-        const toLocalIsoDate = (date: Date) => {
-            const safe = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date();
-            return `${safe.getFullYear()}-${String(safe.getMonth() + 1).padStart(2, '0')}-${String(
-            safe.getDate(),
-            ).padStart(2, '0')}`;
-        };
-
-        const normalizeIsoDate = (value?: string | null): string | null => {
-            if (!value || typeof value !== 'string') return null;
-            const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
-            return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
-        };
-
-        const isValidDate = (d: unknown): d is Date =>
-        d instanceof Date && !Number.isNaN(d.getTime());
-
-        const getAnniversaryCacheKey = (coupleId?: string | null, userId?: string | null) =>
-        `lovevault_anniversary_override_v2_${coupleId || userId || 'guest'}`;
-
-        const ALBUM_CATEGORIES_STORAGE_KEY = (coupleId?: string | null, userId?: string | null) =>
-        `lovevault_album_categories_v1_${coupleId || userId || 'guest'}`;
-
-        const ALBUM_ITEM_CATEGORY_MAP_KEY = (coupleId?: string | null, userId?: string | null) =>
-        `lovevault_album_item_cat_map_v1_${coupleId || userId || 'guest'}`;
-
-        const COUPLE_LOCKET_STAMPS: LocketStampItem[] = [
-        { id: '1', icon: '💕', label: 'Đang nhớ đằng ấy' },
-        { id: '2', icon: '🍕', label: 'Báo cáo bữa ăn' },
-        { id: '3', icon: '👀', label: 'Góc nhìn hiện tại' },
-        { id: '4', icon: '🧋', label: 'Thèm trà sữa' },
-        { id: '5', icon: '💻', label: 'Đang làm việc' },
-        { id: '6', icon: '😴', label: 'Chuẩn bị đi ngủ' },
-        ];
-
-        const PAGE_LABELS = ['Locket', 'Không gian'] as const;
-        const PAGE_SWITCH_PADDING = 3;
-
-        const EMPTY_LIST: never[] = [];
-
-        const locketSnapKeyExtractor = (snap: { id: string }) => snap.id;
-
-        const downloadMediaOnWeb = async (mediaItem: CoupleMediaItem) => {
-            const url = mediaItem.remoteUrl || mediaItem.uri;
-            const ext = mediaItem.mediaType === 'VIDEO' ? 'mp4' : 'jpg';
-            try {
-            const res = await fetch(url);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const blob = await res.blob();
-            const objectUrl = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = objectUrl;
-            link.download = `lovevault_${Date.now()}.${ext}`;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
-        } catch (error) {
-            console.warn('Tải trực tiếp thất bại (thường do CORS), mở tab mới:', error);
-            window.open(url, '_blank', 'noopener');
-        }
-        };
-
-        const handleDownloadMedia = async (mediaItem: CoupleMediaItem) => {
-            if (Platform.OS === 'web') {
-            await downloadMediaOnWeb(mediaItem);
-            return;
-        }
-            try {
-            const { status } = await MediaLibrary.requestPermissionsAsync(true);
-            if (status !== 'granted') {
+const handleDownloadMedia = async (mediaItem: CoupleMediaItem) => {
+    if (Platform.OS === 'web') {
+        await downloadMediaOnWeb(mediaItem);
+        return;
+    }
+    try {
+        const { status } = await MediaLibrary.requestPermissionsAsync(true);
+        if (status !== 'granted') {
             Alert.alert(
-            'Quyền truy cập bị từ chối',
-            'Vui lòng cấp quyền truy cập Thư viện ảnh trong Cài đặt hệ thống để lưu tệp.',
+                'Quyền truy cập bị từ chối',
+                'Vui lòng cấp quyền truy cập Thư viện ảnh trong Cài đặt hệ thống để lưu tệp.',
             );
             return;
         }
 
-            let targetUri = mediaItem.remoteUrl || mediaItem.uri;
+        let targetUri = mediaItem.remoteUrl || mediaItem.uri;
 
-            if (targetUri.startsWith('http://') || targetUri.startsWith('https://')) {
+        if (targetUri.startsWith('http://') || targetUri.startsWith('https://')) {
             const ext = mediaItem.mediaType === 'VIDEO' ? 'mp4' : 'jpg';
             const baseDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory;
             const fileUri = `${baseDir}lovevault_media_${Date.now()}.${ext}`;
@@ -420,50 +161,50 @@ TypeScript
             targetUri = downloadRes.uri;
         }
 
-            await MediaLibrary.createAssetAsync(targetUri);
-            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            Alert.alert('Thành công', 'Đã lưu ảnh/video vào bộ sưu tập của bạn!');
-        } catch (error: any) {
-            console.error('Lỗi khi tải về:', error);
-            Alert.alert('Không thể lưu tệp', 'Có lỗi xảy ra khi lưu tệp về thiết bị. Hãy thử lại.');
-        }
-        };
+        await MediaLibrary.createAssetAsync(targetUri);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        Alert.alert('Thành công', 'Đã lưu ảnh/video vào bộ sưu tập của bạn!');
+    } catch (error: any) {
+        console.error('Lỗi khi tải về:', error);
+        Alert.alert('Không thể lưu tệp', 'Có lỗi xảy ra khi lưu tệp về thiết bị. Hãy thử lại.');
+    }
+};
 
-        const InlineVideoPlayer: React.FC<{ uri: string; height: number }> = ({ uri, height }) => {
-            const player = useVideoPlayer(uri, (p) => {
-            p.loop = false;
-            p.play();
-        });
+const InlineVideoPlayer: React.FC<{ uri: string; height: number }> = ({ uri, height }) => {
+    const player = useVideoPlayer(uri, (p) => {
+        p.loop = false;
+        p.play();
+    });
 
-            return (
-            <VideoView
+    return (
+        <VideoView
             player={player}
-        style={[styles.inlineVideoBox, { height }]}
-        nativeControls
-        contentFit="contain"
-        allowsFullscreen
-    />
-        );
-        };
+            style={[styles.inlineVideoBox, { height }]}
+            nativeControls
+            contentFit="contain"
+            allowsFullscreen
+        />
+    );
+};
 
-        export const HomeScreen = () => {
-        const insets = useSafeAreaInsets();
-        const { width: rawScreenWidth, height: rawScreenHeight } = useWindowDimensions();
-        // Trừ phần tai thỏ / safe area hai bên khi xoay ngang
-        const usableWidth = Math.max(280, rawScreenWidth - insets.left - insets.right);
-        const screenWidth = usableWidth;
-        const isSmallScreen = screenWidth < 360;
+export const HomeScreen = () => {
+    const insets = useSafeAreaInsets();
+    const { width: rawScreenWidth, height: rawScreenHeight } = useWindowDimensions();
+    // Trừ phần tai thỏ / safe area hai bên khi xoay ngang
+    const usableWidth = Math.max(280, rawScreenWidth - insets.left - insets.right);
+    const screenWidth = usableWidth;
+    const isSmallScreen = screenWidth < 360;
 
-        // Chiều cao xem trước ảnh/video tự thích ứng theo chiều cao thiết bị
-        const previewImageHeight = Math.min(420, Math.max(200, Math.round(rawScreenHeight * 0.46)));
-        const previewVideoHeight = Math.min(360, Math.max(180, Math.round(rawScreenHeight * 0.4)));
+    // Chiều cao xem trước ảnh/video tự thích ứng theo chiều cao thiết bị
+    const previewImageHeight = Math.min(420, Math.max(200, Math.round(rawScreenHeight * 0.46)));
+    const previewVideoHeight = Math.min(360, Math.max(180, Math.round(rawScreenHeight * 0.4)));
 
-        const systemScheme = useColorScheme();
-        const queryClient = useQueryClient();
-        const { logout, coupleId, user, syncCoupleStatusFromServer } = useAuthStore();
-        const currentUserId = user?.id || null;
+    const systemScheme = useColorScheme();
+    const queryClient = useQueryClient();
+    const { logout, coupleId, user, syncCoupleStatusFromServer } = useAuthStore();
+    const currentUserId = user?.id || null;
 
-        const {
+    const {
         themePreset,
         colorMode,
         myProfile,
@@ -482,31 +223,31 @@ TypeScript
         recordMomoContribution,
     } = useSettingsStore();
 
-        const anniversaryCacheKey = React.useMemo(
+    const anniversaryCacheKey = React.useMemo(
         () => getAnniversaryCacheKey(coupleId, currentUserId),
         [coupleId, currentUserId],
-        );
+    );
 
-        const albumCategoriesKey = React.useMemo(
+    const albumCategoriesKey = React.useMemo(
         () => ALBUM_CATEGORIES_STORAGE_KEY(coupleId, currentUserId),
         [coupleId, currentUserId],
-        );
+    );
 
-        const itemCategoryMapKey = React.useMemo(
+    const itemCategoryMapKey = React.useMemo(
         () => ALBUM_ITEM_CATEGORY_MAP_KEY(coupleId, currentUserId),
         [coupleId, currentUserId],
-        );
+    );
 
-        const isMomoFundEnabled = (momoFund as any)?.enabled !== false;
+    const isMomoFundEnabled = (momoFund as any)?.enabled !== false;
 
-        const isDark =
+    const isDark =
         colorMode === 'DARK' || (colorMode === 'SYSTEM' && systemScheme === 'dark');
-        const colors = React.useMemo(
+    const colors = React.useMemo(
         () => getThemeColors(themePreset, isDark),
         [themePreset, isDark],
-        );
+    );
 
-        const {
+    const {
         events = EMPTY_LIST,
         goals = EMPTY_LIST,
         mediaList = EMPTY_LIST,
@@ -524,7 +265,7 @@ TypeScript
         restoreWorkspaceBackup,
     } = useCoupleWorkspace();
 
-        const {
+    const {
         activeQA,
         qaFilter,
         qaHistory,
@@ -538,7 +279,7 @@ TypeScript
         selectQuestionFromHistory,
     } = useRealtimeDailyQA();
 
-        const {
+    const {
         locketSnaps: realtimeLocketSnaps = EMPTY_LIST,
         locketLive,
         captureFromCameraCard: handleCapturePhotoUri,
@@ -548,74 +289,74 @@ TypeScript
         refreshLockets,
     } = useRealtimeLocket();
 
-        const [albumCategories, setAlbumCategories] = useState<string[]>([
+    const [albumCategories, setAlbumCategories] = useState<string[]>([
         'Kỷ niệm hẹn hò',
         'Du lịch cùng nhau',
         'Ẩm thực & Trà sữa',
-        ]);
-        const [itemCategoryMap, setItemCategoryMap] = useState<Record<string, string>>({});
-        const [selectedAlbumCategory, setSelectedAlbumCategory] = useState<string>('ALL');
-        const [createCategoryModalVisible, setCreateCategoryModalVisible] = useState(false);
-        const [newCategoryNameInput, setNewCategoryNameInput] = useState('');
-        const pendingTargetCategoryRef = useRef<string | null>(null);
+    ]);
+    const [itemCategoryMap, setItemCategoryMap] = useState<Record<string, string>>({});
+    const [selectedAlbumCategory, setSelectedAlbumCategory] = useState<string>('ALL');
+    const [createCategoryModalVisible, setCreateCategoryModalVisible] = useState(false);
+    const [newCategoryNameInput, setNewCategoryNameInput] = useState('');
+    const pendingTargetCategoryRef = useRef<string | null>(null);
 
-        useEffect(() => {
+    useEffect(() => {
         storage.getItem(albumCategoriesKey).then((raw) => {
-        if (!raw) return;
-        try {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-        setAlbumCategories(parsed);
-    }
-    } catch {}
-    });
+            if (!raw) return;
+            try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    setAlbumCategories(parsed);
+                }
+            } catch {}
+        });
         storage.getItem(itemCategoryMapKey).then((raw) => {
-        if (!raw) return;
-        try {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-        setItemCategoryMap(parsed);
-    }
-    } catch {}
-    });
+            if (!raw) return;
+            try {
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    setItemCategoryMap(parsed);
+                }
+            } catch {}
+        });
     }, [albumCategoriesKey, itemCategoryMapKey]);
 
-        const saveAlbumCategoriesList = useCallback(
+    const saveAlbumCategoriesList = useCallback(
         async (nextList: string[]) => {
-        setAlbumCategories(nextList);
-        await storage.setItem(albumCategoriesKey, JSON.stringify(nextList));
-    },
+            setAlbumCategories(nextList);
+            await storage.setItem(albumCategoriesKey, JSON.stringify(nextList));
+        },
         [albumCategoriesKey],
-        );
+    );
 
-        const assignMediaToCategory = useCallback(
+    const assignMediaToCategory = useCallback(
         async (mediaId: string, categoryName: string, remoteUrl?: string) => {
-        setItemCategoryMap((prev) => {
-        const next = { ...prev };
-        if (!categoryName || categoryName === 'ALL') {
-        delete next[mediaId];
-        if (remoteUrl) delete next[remoteUrl];
-    } else {
-        next[mediaId] = categoryName;
-        if (remoteUrl) next[remoteUrl] = categoryName;
-    }
-        void storage.setItem(itemCategoryMapKey, JSON.stringify(next));
-        return next;
-    });
-    },
+            setItemCategoryMap((prev) => {
+                const next = { ...prev };
+                if (!categoryName || categoryName === 'ALL') {
+                    delete next[mediaId];
+                    if (remoteUrl) delete next[remoteUrl];
+                } else {
+                    next[mediaId] = categoryName;
+                    if (remoteUrl) next[remoteUrl] = categoryName;
+                }
+                void storage.setItem(itemCategoryMapKey, JSON.stringify(next));
+                return next;
+            });
+        },
         [itemCategoryMapKey],
-        );
+    );
 
-        const handleCreateAlbumCategory = useCallback(async () => {
+    const handleCreateAlbumCategory = useCallback(async () => {
         const trimmed = newCategoryNameInput.trim();
         if (!trimmed) {
-        Alert.alert('Thiếu tên danh mục', 'Vui lòng nhập tên danh mục bạn muốn tạo.');
-        return;
-    }
+            Alert.alert('Thiếu tên danh mục', 'Vui lòng nhập tên danh mục bạn muốn tạo.');
+            return;
+        }
         if (albumCategories.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
-        Alert.alert('Đã tồn tại', 'Danh mục này đã có trong Album của bạn.');
-        return;
-    }
+            Alert.alert('Đã tồn tại', 'Danh mục này đã có trong Album của bạn.');
+            return;
+        }
         const next = [...albumCategories, trimmed];
         await saveAlbumCategoriesList(next);
         setSelectedAlbumCategory(trimmed);
@@ -624,161 +365,161 @@ TypeScript
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }, [newCategoryNameInput, albumCategories, saveAlbumCategoriesList]);
 
-        const handleDeleteAlbumCategory = useCallback(
+    const handleDeleteAlbumCategory = useCallback(
         (categoryName: string) => {
-        Alert.alert(
-        'Xóa danh mục',
-        `Bạn muốn xóa danh mục "${categoryName}"? (Các ảnh bên trong sẽ không bị mất mà chuyển về mục Tất cả).`,
-        [
-    { text: 'Hủy', style: 'cancel' },
-    {
-        text: 'Xóa danh mục',
-        style: 'destructive',
-        onPress: async () => {
-        const next = albumCategories.filter((c) => c !== categoryName);
-        await saveAlbumCategoriesList(next);
-        if (selectedAlbumCategory === categoryName) {
-        setSelectedAlbumCategory('ALL');
-    }
-    },
-    },
-        ],
-        );
-    },
+            Alert.alert(
+                'Xóa danh mục',
+                `Bạn muốn xóa danh mục "${categoryName}"? (Các ảnh bên trong sẽ không bị mất mà chuyển về mục Tất cả).`,
+                [
+                    { text: 'Hủy', style: 'cancel' },
+                    {
+                        text: 'Xóa danh mục',
+                        style: 'destructive',
+                        onPress: async () => {
+                            const next = albumCategories.filter((c) => c !== categoryName);
+                            await saveAlbumCategoriesList(next);
+                            if (selectedAlbumCategory === categoryName) {
+                                setSelectedAlbumCategory('ALL');
+                            }
+                        },
+                    },
+                ],
+            );
+        },
         [albumCategories, selectedAlbumCategory, saveAlbumCategoriesList],
-        );
+    );
 
-        const { data: cloudMediaPayload, refetch: refetchCloudMedia } = useQuery({
+    const { data: cloudMediaPayload, refetch: refetchCloudMedia } = useQuery({
         queryKey: ['cloudWorkspaceMedia', coupleId, currentUserId],
         enabled: Boolean(coupleId),
         queryFn: async () => {
-        await flushPendingCloudMediaQueue().catch(() => null);
-        return fetchCloudWorkspaceMedia(150);
-    },
+            await flushPendingCloudMediaQueue().catch(() => null);
+            return fetchCloudWorkspaceMedia(150);
+        },
         staleTime: 1000 * 30,
         retry: 2,
     });
 
-        useEffect(() => {
+    useEffect(() => {
         const cloudAlbum = cloudMediaPayload?.albumMedia;
         if (!Array.isArray(cloudAlbum) || cloudAlbum.length === 0) return;
         const discoveredCategories = new Set(albumCategories);
         let hasNew = false;
         for (const m of cloudAlbum) {
-        if (
-        m.stamp &&
-        m.caption !== 'thumbnail' &&
-        m.caption !== 'Hero Wallpaper' &&
-        !discoveredCategories.has(m.stamp)
-        ) {
-        discoveredCategories.add(m.stamp);
-        hasNew = true;
-    }
-    }
+            if (
+                m.stamp &&
+                m.caption !== 'thumbnail' &&
+                m.caption !== 'Hero Wallpaper' &&
+                !discoveredCategories.has(m.stamp)
+            ) {
+                discoveredCategories.add(m.stamp);
+                hasNew = true;
+            }
+        }
         if (hasNew) {
-        void saveAlbumCategoriesList(Array.from(discoveredCategories));
-    }
+            void saveAlbumCategoriesList(Array.from(discoveredCategories));
+        }
     }, [cloudMediaPayload?.albumMedia, albumCategories, saveAlbumCategoriesList]);
 
-        const mergedMediaList = React.useMemo<AlbumMediaWithCategory[]>(() => {
+    const mergedMediaList = React.useMemo<AlbumMediaWithCategory[]>(() => {
         const cloudItems: AlbumMediaWithCategory[] = (cloudMediaPayload?.albumMedia || [])
-        .filter((m) => m.caption !== 'thumbnail' && m.caption !== 'Hero Wallpaper')
-        .map((m) => ({
-        id: m.id,
-        uri: m.remoteUrl,
-        remoteUrl: m.remoteUrl,
-        thumbnailUri: m.thumbnailUrl || undefined,
-        mediaType: m.mediaType,
-        caption: m.caption || 'Kỷ niệm của hai đứa',
-        createdAt: new Date(m.createdAt).toLocaleDateString('vi-VN'),
-        durationSec: m.durationSec ?? undefined,
-        albumCategory:
-        itemCategoryMap[m.id] ||
-        (m.remoteUrl ? itemCategoryMap[m.remoteUrl] : undefined) ||
-        m.stamp ||
-        undefined,
-    }));
+            .filter((m) => m.caption !== 'thumbnail' && m.caption !== 'Hero Wallpaper')
+            .map((m) => ({
+                id: m.id,
+                uri: m.remoteUrl,
+                remoteUrl: m.remoteUrl,
+                thumbnailUri: m.thumbnailUrl || undefined,
+                mediaType: m.mediaType,
+                caption: m.caption || 'Kỷ niệm của hai đứa',
+                createdAt: new Date(m.createdAt).toLocaleDateString('vi-VN'),
+                durationSec: m.durationSec ?? undefined,
+                albumCategory:
+                    itemCategoryMap[m.id] ||
+                    (m.remoteUrl ? itemCategoryMap[m.remoteUrl] : undefined) ||
+                    m.stamp ||
+                    undefined,
+            }));
 
         const validLocalMedia: AlbumMediaWithCategory[] = mediaList
-        .filter((loc) => loc.caption !== 'thumbnail' && loc.caption !== 'Hero Wallpaper')
-        .map((loc) => ({
-        ...loc,
-        albumCategory:
-        itemCategoryMap[loc.id] ||
-        (loc.remoteUrl ? itemCategoryMap[loc.remoteUrl] : undefined) ||
-        (loc as AlbumMediaWithCategory).albumCategory,
-    }));
+            .filter((loc) => loc.caption !== 'thumbnail' && loc.caption !== 'Hero Wallpaper')
+            .map((loc) => ({
+                ...loc,
+                albumCategory:
+                    itemCategoryMap[loc.id] ||
+                    (loc.remoteUrl ? itemCategoryMap[loc.remoteUrl] : undefined) ||
+                    (loc as AlbumMediaWithCategory).albumCategory,
+            }));
 
         if (cloudItems.length === 0) return validLocalMedia;
 
         const seenUrls = new Set(cloudItems.map((i) => i.remoteUrl || i.uri));
         const seenIds = new Set(cloudItems.map((i) => i.id));
         const localOnly = validLocalMedia.filter(
-        (loc) => !seenIds.has(loc.id) && !seenUrls.has(loc.remoteUrl || loc.uri),
+            (loc) => !seenIds.has(loc.id) && !seenUrls.has(loc.remoteUrl || loc.uri),
         );
         return [...cloudItems, ...localOnly];
     }, [cloudMediaPayload?.albumMedia, mediaList, itemCategoryMap]);
 
-        const mergedLocketSnaps = React.useMemo<LocketSnapView[]>(() => {
+    const mergedLocketSnaps = React.useMemo<LocketSnapView[]>(() => {
         const cloudSnaps = Array.isArray(cloudMediaPayload?.locketSnaps)
-        ? cloudMediaPayload.locketSnaps
-        : [];
+            ? cloudMediaPayload.locketSnaps
+            : [];
         if (cloudSnaps.length === 0) return realtimeLocketSnaps;
 
         const seenIds = new Set(realtimeLocketSnaps.map((s) => s.id));
         const seenUris = new Set(
-        realtimeLocketSnaps.map((s) => (s as any).remoteUrl || s.uri).filter(Boolean),
+            realtimeLocketSnaps.map((s) => (s as any).remoteUrl || s.uri).filter(Boolean),
         );
 
         const extraFromCloud: LocketSnapView[] = [];
         for (const c of cloudSnaps as any[]) {
-        if (!c) continue;
-        const uri = c.remoteUrl || c.uri;
-        if (!uri) continue;
-        if (seenIds.has(c.id) || seenUris.has(uri)) continue;
-        seenIds.add(c.id);
-        seenUris.add(uri);
-        extraFromCloud.push({
-        id: c.id,
-        uri,
-        ownerId: c.ownerId || c.senderId || c.userId || null,
-        senderName: c.senderName || c.authorName || 'Người thương',
-        stampBadge: c.stampBadge || c.stamp || '💕 Đang nhớ đằng ấy',
-        caption: c.caption || '',
-        createdAtTime:
-        c.createdAtTime ||
-        (c.createdAt ? new Date(c.createdAt).toLocaleString('vi-VN') : ''),
-        reactions: Array.isArray(c.reactions) ? c.reactions : [],
-    });
-    }
+            if (!c) continue;
+            const uri = c.remoteUrl || c.uri;
+            if (!uri) continue;
+            if (seenIds.has(c.id) || seenUris.has(uri)) continue;
+            seenIds.add(c.id);
+            seenUris.add(uri);
+            extraFromCloud.push({
+                id: c.id,
+                uri,
+                ownerId: c.ownerId || c.senderId || c.userId || null,
+                senderName: c.senderName || c.authorName || 'Người thương',
+                stampBadge: c.stampBadge || c.stamp || '💕 Đang nhớ đằng ấy',
+                caption: c.caption || '',
+                createdAtTime:
+                    c.createdAtTime ||
+                    (c.createdAt ? new Date(c.createdAt).toLocaleString('vi-VN') : ''),
+                reactions: Array.isArray(c.reactions) ? c.reactions : [],
+            });
+        }
 
         return extraFromCloud.length > 0
-        ? [...realtimeLocketSnaps, ...extraFromCloud]
-        : realtimeLocketSnaps;
+            ? [...realtimeLocketSnaps, ...extraFromCloud]
+            : realtimeLocketSnaps;
     }, [realtimeLocketSnaps, cloudMediaPayload?.locketSnaps]);
 
-        const lastBackupSignatureRef = useRef('');
-        useEffect(() => {
+    const lastBackupSignatureRef = useRef('');
+    useEffect(() => {
         if (!cloudMediaPayload || uploadingMedia) return;
         const hasCloudAlbum =
-        Array.isArray(cloudMediaPayload.albumMedia) && cloudMediaPayload.albumMedia.length > 0;
+            Array.isArray(cloudMediaPayload.albumMedia) && cloudMediaPayload.albumMedia.length > 0;
         const hasCloudLocket =
-        Array.isArray(cloudMediaPayload.locketSnaps) && cloudMediaPayload.locketSnaps.length > 0;
+            Array.isArray(cloudMediaPayload.locketSnaps) && cloudMediaPayload.locketSnaps.length > 0;
 
         if (
-        (hasCloudAlbum && mergedMediaList.length > mediaList.length) ||
-        (hasCloudLocket && cloudMediaPayload.locketSnaps.length > mergedLocketSnaps.length)
+            (hasCloudAlbum && mergedMediaList.length > mediaList.length) ||
+            (hasCloudLocket && cloudMediaPayload.locketSnaps.length > mergedLocketSnaps.length)
         ) {
-        const signature = `${mergedMediaList.length}:${mergedLocketSnaps.length}:${
-        cloudMediaPayload.albumMedia?.length ?? 0
-    }:${cloudMediaPayload.locketSnaps?.length ?? 0}`;
-        if (lastBackupSignatureRef.current === signature) return;
-        lastBackupSignatureRef.current = signature;
-        void restoreWorkspaceBackup({
-        mediaList: mergedMediaList,
-        locketSnaps: mergedLocketSnaps,
-    });
-    }
+            const signature = `${mergedMediaList.length}:${mergedLocketSnaps.length}:${
+                cloudMediaPayload.albumMedia?.length ?? 0
+            }:${cloudMediaPayload.locketSnaps?.length ?? 0}`;
+            if (lastBackupSignatureRef.current === signature) return;
+            lastBackupSignatureRef.current = signature;
+            void restoreWorkspaceBackup({
+                mediaList: mergedMediaList,
+                locketSnaps: mergedLocketSnaps,
+            });
+        }
     }, [
         cloudMediaPayload,
         uploadingMedia,
@@ -786,39 +527,39 @@ TypeScript
         mergedLocketSnaps,
         mediaList.length,
         restoreWorkspaceBackup,
-        ]);
+    ]);
 
-        const [momoTxModal, setMomoTxModal] = useState<{
+    const [momoTxModal, setMomoTxModal] = useState<{
         visible: boolean;
         goal: CoupleGoalItem | null;
         type: 'IN' | 'OUT';
     }>({ visible: false, goal: null, type: 'IN' });
-        const [txAmountInput, setTxAmountInput] = useState('');
-        const [txNoteInput, setTxNoteInput] = useState('');
+    const [txAmountInput, setTxAmountInput] = useState('');
+    const [txNoteInput, setTxNoteInput] = useState('');
 
-        const [eventFilter, setEventFilter] = useState<'ALL' | 'DATE_PLAN' | 'MILESTONE'>('ALL');
-        const [mediaFilter, setMediaFilter] = useState<'ALL' | 'IMAGE' | 'VIDEO'>('ALL');
+    const [eventFilter, setEventFilter] = useState<'ALL' | 'DATE_PLAN' | 'MILESTONE'>('ALL');
+    const [mediaFilter, setMediaFilter] = useState<'ALL' | 'IMAGE' | 'VIDEO'>('ALL');
 
-        const filteredEvents = React.useMemo(() => {
+    const filteredEvents = React.useMemo(() => {
         if (eventFilter === 'DATE_PLAN') {
-        return events.filter((e) => e.category === 'DATE_PLAN');
-    }
+            return events.filter((e) => e.category === 'DATE_PLAN');
+        }
         if (eventFilter === 'MILESTONE') {
-        return events.filter((e) => e.category !== 'DATE_PLAN');
-    }
+            return events.filter((e) => e.category !== 'DATE_PLAN');
+        }
         return events;
     }, [events, eventFilter]);
 
-        const horizontalPagerRef = useRef<ScrollView | null>(null);
-        const [currentPage, setCurrentPage] = useState<0 | 1>(0);
+    const horizontalPagerRef = useRef<ScrollView | null>(null);
+    const [currentPage, setCurrentPage] = useState<0 | 1>(0);
 
-        const [activeTab, setActiveTab] = useState<DashboardSection>('EVENTS');
-        const [refreshing, setRefreshing] = useState(false);
-        const [profileVisible, setProfileVisible] = useState(false);
-        const [settingsVisible, setSettingsVisible] = useState(false);
-        const [testingAiEventId, setTestingAiEventId] = useState<string | null>(null);
+    const [activeTab, setActiveTab] = useState<DashboardSection>('EVENTS');
+    const [refreshing, setRefreshing] = useState(false);
+    const [profileVisible, setProfileVisible] = useState(false);
+    const [settingsVisible, setSettingsVisible] = useState(false);
+    const [testingAiEventId, setTestingAiEventId] = useState<string | null>(null);
 
-        const [formModal, setFormModal] = useState<{
+    const [formModal, setFormModal] = useState<{
         visible: boolean;
         mode: 'EVENT' | 'GOAL';
         initialEventCategory?: 'ANNIVERSARY' | 'BIRTHDAY' | 'DATE_PLAN';
@@ -826,233 +567,233 @@ TypeScript
         editingGoal?: CoupleGoalItem | null;
     }>({ visible: false, mode: 'EVENT', initialEventCategory: 'ANNIVERSARY' });
 
-        const [cachedAnniversaryIso, setCachedAnniversaryIso] = useState<string | null>(null);
-        const [showAnnivPicker, setShowAnnivPicker] = useState(false);
-        const [tempAnnivDate, setTempAnnivDate] = useState<Date>(new Date());
+    const [cachedAnniversaryIso, setCachedAnniversaryIso] = useState<string | null>(null);
+    const [showAnnivPicker, setShowAnnivPicker] = useState(false);
+    const [tempAnnivDate, setTempAnnivDate] = useState<Date>(new Date());
 
-        const [selectedMedia, setSelectedMedia] = useState<AlbumMediaWithCategory | null>(null);
-        const [pinUnlockInput, setPinUnlockInput] = useState('');
+    const [selectedMedia, setSelectedMedia] = useState<AlbumMediaWithCategory | null>(null);
+    const [pinUnlockInput, setPinUnlockInput] = useState('');
 
-        const handleAutoScanMomoClipboard = useCallback(
+    const handleAutoScanMomoClipboard = useCallback(
         async (targetGoal: CoupleGoalItem) => {
-        const clipText = await Clipboard.getStringAsync();
-        const parsed = parseMomoTransactionText(clipText);
+            const clipText = await Clipboard.getStringAsync();
+            const parsed = parseMomoTransactionText(clipText);
 
-        if (!parsed) {
-        Alert.alert(
-        'Chưa tìm thấy giao dịch MoMo trong bộ nhớ tạm',
-        'Hãy sao chép tin nhắn hoặc thông báo biến động số dư từ MoMo (VD: "+500.000đ" hoặc "Chuyển 200.000đ") rồi bấm lại nút này để ứng dụng tự động cập nhật phần trăm.',
-        );
-        return;
-    }
+            if (!parsed) {
+                Alert.alert(
+                    'Chưa tìm thấy giao dịch MoMo trong bộ nhớ tạm',
+                    'Hãy sao chép tin nhắn hoặc thông báo biến động số dư từ MoMo (VD: "+500.000đ" hoặc "Chuyển 200.000đ") rồi bấm lại nút này để ứng dụng tự động cập nhật phần trăm.',
+                );
+                return;
+            }
 
-        const actionLabel = parsed.type === 'IN' ? 'CỘNG VÀO (+)' : 'TRỪ RA (-)';
-        Alert.alert(
-        'Phát hiện biến động MoMo',
-        `Hệ thống đọc được giao dịch ${actionLabel} ${parsed.amount.toLocaleString('vi-VN')}đ từ thông báo: "${parsed.rawSummary}". Áp dụng ngay vào mục tiêu "${targetGoal.title}"?`,
-        [
-    { text: 'Hủy', style: 'cancel' },
-    {
-        text: 'Cập nhật ngay',
-        onPress: async () => {
-        await recordGoalMomoTransaction(
-        targetGoal.id,
-        parsed.type,
-        parsed.amount,
-        parsed.rawSummary,
-        );
-    },
-    },
-        ],
-        );
-    },
+            const actionLabel = parsed.type === 'IN' ? 'CỘNG VÀO (+)' : 'TRỪ RA (-)';
+            Alert.alert(
+                'Phát hiện biến động MoMo',
+                `Hệ thống đọc được giao dịch ${actionLabel} ${parsed.amount.toLocaleString('vi-VN')}đ từ thông báo: "${parsed.rawSummary}". Áp dụng ngay vào mục tiêu "${targetGoal.title}"?`,
+                [
+                    { text: 'Hủy', style: 'cancel' },
+                    {
+                        text: 'Cập nhật ngay',
+                        onPress: async () => {
+                            await recordGoalMomoTransaction(
+                                targetGoal.id,
+                                parsed.type,
+                                parsed.amount,
+                                parsed.rawSummary,
+                            );
+                        },
+                    },
+                ],
+            );
+        },
         [recordGoalMomoTransaction],
-        );
+    );
 
-        const importBackupJson = useCallback(
+    const importBackupJson = useCallback(
         async (rawJson: string) => {
-        const parsed = JSON.parse(rawJson);
-        if (!parsed || typeof parsed !== 'object') {
-        throw new Error('INVALID_BACKUP');
-    }
+            const parsed = JSON.parse(rawJson);
+            if (!parsed || typeof parsed !== 'object') {
+                throw new Error('INVALID_BACKUP');
+            }
 
-        if (parsed.anniversaryDate && typeof parsed.anniversaryDate === 'string') {
-        setCachedAnniversaryIso(parsed.anniversaryDate);
-        await storage.setItem(anniversaryCacheKey, parsed.anniversaryDate);
-    }
+            if (parsed.anniversaryDate && typeof parsed.anniversaryDate === 'string') {
+                setCachedAnniversaryIso(parsed.anniversaryDate);
+                await storage.setItem(anniversaryCacheKey, parsed.anniversaryDate);
+            }
 
-        if (Array.isArray(parsed.albumCategories)) {
-        await saveAlbumCategoriesList(parsed.albumCategories);
-    }
+            if (Array.isArray(parsed.albumCategories)) {
+                await saveAlbumCategoriesList(parsed.albumCategories);
+            }
 
-        if (parsed.itemCategoryMap && typeof parsed.itemCategoryMap === 'object') {
-        setItemCategoryMap(parsed.itemCategoryMap);
-        await storage.setItem(itemCategoryMapKey, JSON.stringify(parsed.itemCategoryMap));
-    }
+            if (parsed.itemCategoryMap && typeof parsed.itemCategoryMap === 'object') {
+                setItemCategoryMap(parsed.itemCategoryMap);
+                await storage.setItem(itemCategoryMapKey, JSON.stringify(parsed.itemCategoryMap));
+            }
 
-        const exportedByUserId = parsed.exportedByUserId || parsed.myProfile?.userId;
-        const isExportedByPartner =
-        Boolean(exportedByUserId) &&
-        Boolean(currentUserId) &&
-        String(exportedByUserId) !== String(currentUserId);
+            const exportedByUserId = parsed.exportedByUserId || parsed.myProfile?.userId;
+            const isExportedByPartner =
+                Boolean(exportedByUserId) &&
+                Boolean(currentUserId) &&
+                String(exportedByUserId) !== String(currentUserId);
 
-        if (parsed.myProfile || parsed.partnerProfile) {
-        if (isExportedByPartner) {
-        await useSettingsStore
-        .getState()
-        .updateProfiles(
-    { ...(parsed.partnerProfile || {}), userId: currentUserId },
-    { ...(parsed.myProfile || {}), userId: String(exportedByUserId) },
-        );
-    } else {
-        await useSettingsStore
-        .getState()
-        .updateProfiles(parsed.myProfile, parsed.partnerProfile);
-    }
-    }
+            if (parsed.myProfile || parsed.partnerProfile) {
+                if (isExportedByPartner) {
+                    await useSettingsStore
+                        .getState()
+                        .updateProfiles(
+                            { ...(parsed.partnerProfile || {}), userId: currentUserId },
+                            { ...(parsed.myProfile || {}), userId: String(exportedByUserId) },
+                        );
+                } else {
+                    await useSettingsStore
+                        .getState()
+                        .updateProfiles(parsed.myProfile, parsed.partnerProfile);
+                }
+            }
 
-        await useSettingsStore.getState().syncIdentityFromAuth({
-        userId: currentUserId || 'local_me',
-        coupleId,
-        sharedRoomPayload: {
-        membersById: useSettingsStore.getState().membersById,
-        heroWallpaperUri: parsed.heroWallpaperUri,
-        themePreset: parsed.themePreset,
-        loveCoupons: parsed.loveCoupons,
-        momoFund: parsed.momoFund,
-        streakDays: parsed.streakDays,
-        heartTapTotal: parsed.heartTapTotal,
-    },
-    });
+            await useSettingsStore.getState().syncIdentityFromAuth({
+                userId: currentUserId || 'local_me',
+                coupleId,
+                sharedRoomPayload: {
+                    membersById: useSettingsStore.getState().membersById,
+                    heroWallpaperUri: parsed.heroWallpaperUri,
+                    themePreset: parsed.themePreset,
+                    loveCoupons: parsed.loveCoupons,
+                    momoFund: parsed.momoFund,
+                    streakDays: parsed.streakDays,
+                    heartTapTotal: parsed.heartTapTotal,
+                },
+            });
 
-        await restoreWorkspaceBackup({
-        events: parsed.events,
-        goals: parsed.goals,
-        locketSnaps: parsed.locketSnaps,
-        mediaList: parsed.mediaList,
-    });
-    },
+            await restoreWorkspaceBackup({
+                events: parsed.events,
+                goals: parsed.goals,
+                locketSnaps: parsed.locketSnaps,
+                mediaList: parsed.mediaList,
+            });
+        },
         [
-        anniversaryCacheKey,
-        coupleId,
-        currentUserId,
-        itemCategoryMapKey,
-        restoreWorkspaceBackup,
-        saveAlbumCategoriesList,
+            anniversaryCacheKey,
+            coupleId,
+            currentUserId,
+            itemCategoryMapKey,
+            restoreWorkspaceBackup,
+            saveAlbumCategoriesList,
         ],
-        );
+    );
 
-        const handleOpenMomoAndContribute = useCallback(
+    const handleOpenMomoAndContribute = useCallback(
         async (amount: number, targetGoal?: CoupleGoalItem) => {
-        if (!momoFund?.holderPhone && !momoFund?.momoPaymentLink) {
-        Alert.alert(
-        'Chưa thiết lập Quỹ MoMo',
-        'Hãy vào mục Tùy chỉnh để nhập SĐT MoMo giữ quỹ hoặc dán link Quỹ nhóm MoMo của hai bạn.',
-        [
-    { text: 'Đóng', style: 'cancel' },
-    { text: 'Mở Tùy chỉnh', onPress: () => setSettingsVisible(true) },
-        ],
-        );
-        return;
-    }
+            if (!momoFund?.holderPhone && !momoFund?.momoPaymentLink) {
+                Alert.alert(
+                    'Chưa thiết lập Quỹ MoMo',
+                    'Hãy vào mục Tùy chỉnh để nhập SĐT MoMo giữ quỹ hoặc dán link Quỹ nhóm MoMo của hai bạn.',
+                    [
+                        { text: 'Đóng', style: 'cancel' },
+                        { text: 'Mở Tùy chỉnh', onPress: () => setSettingsVisible(true) },
+                    ],
+                );
+                return;
+            }
 
-        const transferNote = targetGoal
-        ? `Gop quy ${targetGoal.title}`
-        : `Gop quy chung LoveVault`;
+            const transferNote = targetGoal
+                ? `Gop quy ${targetGoal.title}`
+                : `Gop quy chung LoveVault`;
 
-        if (momoFund.holderPhone) {
-        await Clipboard.setStringAsync(momoFund.holderPhone);
-    }
+            if (momoFund.holderPhone) {
+                await Clipboard.setStringAsync(momoFund.holderPhone);
+            }
 
-        const candidateUrl = momoFund.momoPaymentLink?.trim()
-        ? momoFund.momoPaymentLink.trim()
-        : `momo://`;
+            const candidateUrl = momoFund.momoPaymentLink?.trim()
+                ? momoFund.momoPaymentLink.trim()
+                : `momo://`;
 
-        try {
-        const supported = await Linking.canOpenURL(candidateUrl);
-        if (supported) {
-        await Linking.openURL(candidateUrl);
-    } else if (momoFund.holderPhone) {
-        await Linking.openURL(`https://me.momo.vn/${momoFund.holderPhone}`);
-    }
-    } catch {
-        // Bỏ qua nếu chưa cài App MoMo
-    }
+            try {
+                const supported = await Linking.canOpenURL(candidateUrl);
+                if (supported) {
+                    await Linking.openURL(candidateUrl);
+                } else if (momoFund.holderPhone) {
+                    await Linking.openURL(`https://me.momo.vn/${momoFund.holderPhone}`);
+                }
+            } catch {
+                // Bỏ qua nếu chưa cài App MoMo
+            }
 
-        Alert.alert(
-        'Xác nhận nạp Quỹ chung MoMo',
-        `Đã sao chép SĐT chủ quỹ (${momoFund.holderPhone || momoFund.holderName}). Sau khi chuyển ${amount.toLocaleString('vi-VN')}đ trên MoMo với nội dung "${transferNote}", bấm Xác nhận để cộng vào tiến độ mục tiêu.`,
-        [
-    { text: 'Để sau', style: 'cancel' },
-    {
-        text: 'Đã chuyển xong',
-        onPress: async () => {
-        await recordMomoContribution(
-        myProfile.nickname,
-        amount,
-        targetGoal?.title || momoFund.holderName,
-        );
-        if (targetGoal) {
-        await recordGoalMomoTransaction(
-        targetGoal.id,
-        'IN',
-        amount,
-        `Nạp nhanh qua MoMo`,
-        );
-    }
-    },
-    },
-        ],
-        );
-    },
+            Alert.alert(
+                'Xác nhận nạp Quỹ chung MoMo',
+                `Đã sao chép SĐT chủ quỹ (${momoFund.holderPhone || momoFund.holderName}). Sau khi chuyển ${amount.toLocaleString('vi-VN')}đ trên MoMo với nội dung "${transferNote}", bấm Xác nhận để cộng vào tiến độ mục tiêu.`,
+                [
+                    { text: 'Để sau', style: 'cancel' },
+                    {
+                        text: 'Đã chuyển xong',
+                        onPress: async () => {
+                            await recordMomoContribution(
+                                myProfile.nickname,
+                                amount,
+                                targetGoal?.title || momoFund.holderName,
+                            );
+                            if (targetGoal) {
+                                await recordGoalMomoTransaction(
+                                    targetGoal.id,
+                                    'IN',
+                                    amount,
+                                    `Nạp nhanh qua MoMo`,
+                                );
+                            }
+                        },
+                    },
+                ],
+            );
+        },
         [momoFund, myProfile.nickname, recordMomoContribution, recordGoalMomoTransaction],
-        );
+    );
 
-        useEffect(() => {
+    useEffect(() => {
         void hydrateSettings(currentUserId, coupleId).then(() => {
-        if (coupleId) {
-        void pullSharedRoomSettingsFromServer();
-    }
-    });
+            if (coupleId) {
+                void pullSharedRoomSettingsFromServer();
+            }
+        });
         storage.getItem(anniversaryCacheKey).then((saved) => {
-        setCachedAnniversaryIso(saved || null);
-    });
+            setCachedAnniversaryIso(saved || null);
+        });
     }, [
         hydrateSettings,
         pullSharedRoomSettingsFromServer,
         currentUserId,
         coupleId,
         anniversaryCacheKey,
-        ]);
+    ]);
 
-        const { data: counterData, isLoading, refetch } = useQuery({
+    const { data: counterData, isLoading, refetch } = useQuery({
         queryKey: ['dayCounter', coupleId, currentUserId],
         queryFn: async () => {
-        const res = await api.get('/api/v1/couples/day-counter');
-        void syncCoupleStatusFromServer();
-        return res.data;
-    },
+            const res = await api.get('/api/v1/couples/day-counter');
+            void syncCoupleStatusFromServer();
+            return res.data;
+        },
         retry: 1,
         refetchInterval: 30000,
     });
 
-        const effectiveAnniversaryIso: string | null =
+    const effectiveAnniversaryIso: string | null =
         normalizeIsoDate(cachedAnniversaryIso) ||
         normalizeIsoDate(counterData?.anniversaryDate) ||
         normalizeIsoDate(counterData?.startDate) ||
         null;
 
-        useEffect(() => {
+    useEffect(() => {
         const serverAnniv = normalizeIsoDate(
-        counterData?.anniversaryDate || counterData?.startDate,
+            counterData?.anniversaryDate || counterData?.startDate,
         );
         if (serverAnniv) {
-        setCachedAnniversaryIso(serverAnniv);
-        void storage.setItem(anniversaryCacheKey, serverAnniv);
-    }
+            setCachedAnniversaryIso(serverAnniv);
+            void storage.setItem(anniversaryCacheKey, serverAnniv);
+        }
     }, [counterData?.anniversaryDate, counterData?.startDate, anniversaryCacheKey]);
 
-        const handleSaveAnniversary = async (dateObj: Date) => {
+    const handleSaveAnniversary = async (dateObj: Date) => {
         const y = dateObj.getFullYear();
         const m = String(dateObj.getMonth() + 1).padStart(2, '0');
         const d = String(dateObj.getDate()).padStart(2, '0');
@@ -1063,78 +804,78 @@ TypeScript
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
         try {
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Ho_Chi_Minh';
-        await api.patch('/api/v1/couples/anniversary', {
-        anniversaryDate: iso,
-        timezone: tz,
-    });
-        await queryClient.invalidateQueries({ queryKey: ['dayCounter'] });
-    } catch {
-        Alert.alert(
-        'Chưa đồng bộ được',
-        'Ngày kỷ niệm mới chỉ lưu trên máy này. Thiết bị còn lại sẽ chưa thấy ngày này cho đến khi lưu lại thành công.',
-        );
-    }
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Ho_Chi_Minh';
+            await api.patch('/api/v1/couples/anniversary', {
+                anniversaryDate: iso,
+                timezone: tz,
+            });
+            await queryClient.invalidateQueries({ queryKey: ['dayCounter'] });
+        } catch {
+            Alert.alert(
+                'Chưa đồng bộ được',
+                'Ngày kỷ niệm mới chỉ lưu trên máy này. Thiết bị còn lại sẽ chưa thấy ngày này cho đến khi lưu lại thành công.',
+            );
+        }
     };
 
-        const onAnnivPickerChange = (ev: DateTimePickerEvent, selected?: Date) => {
+    const onAnnivPickerChange = (ev: DateTimePickerEvent, selected?: Date) => {
         const valid = isValidDate(selected) ? selected : undefined;
         if (Platform.OS === 'android') {
-        setShowAnnivPicker(false);
-        if (ev.type === 'set' && valid) {
-        void handleSaveAnniversary(valid);
-    }
-    } else if (valid) {
-        setTempAnnivDate(valid);
-    }
+            setShowAnnivPicker(false);
+            if (ev.type === 'set' && valid) {
+                void handleSaveAnniversary(valid);
+            }
+        } else if (valid) {
+            setTempAnnivDate(valid);
+        }
     };
 
-        const handleTestAiOnEvent = async (item: ImportantEvent) => {
+    const handleTestAiOnEvent = async (item: ImportantEvent) => {
         if (testingAiEventId) return;
         try {
-        setTestingAiEventId(item.id);
-        const { freshMessage, elapsedMs } = await forceTestGeminiOnEvent(item);
-        Alert.alert(`Đã làm mới lời nhắc (${elapsedMs}ms)`, freshMessage);
-    } catch (err: any) {
-        Alert.alert(
-        'Không thể tạo lời nhắc mới',
-        err?.message || 'Vui lòng kiểm tra lại kết nối mạng hoặc khóa Gemini API.',
-        );
-    } finally {
-        setTestingAiEventId(null);
-    }
+            setTestingAiEventId(item.id);
+            const { freshMessage, elapsedMs } = await forceTestGeminiOnEvent(item);
+            Alert.alert(`Đã làm mới lời nhắc (${elapsedMs}ms)`, freshMessage);
+        } catch (err: any) {
+            Alert.alert(
+                'Không thể tạo lời nhắc mới',
+                err?.message || 'Vui lòng kiểm tra lại kết nối mạng hoặc khóa Gemini API.',
+            );
+        } finally {
+            setTestingAiEventId(null);
+        }
     };
 
-        const handleSendMissYou = async () => {
+    const handleSendMissYou = async () => {
         await recordInteractionStreak();
         api
-        .post('/api/v1/couples/miss-you', {
-        senderId: currentUserId,
-        senderNickname: myProfile.nickname,
-        sentAt: new Date().toISOString(),
-    })
-        .catch(() => null);
+            .post('/api/v1/couples/miss-you', {
+                senderId: currentUserId,
+                senderNickname: myProfile.nickname,
+                sentAt: new Date().toISOString(),
+            })
+            .catch(() => null);
 
         Alert.alert(
-        'Đã gửi tín hiệu',
-        `${partnerProfile.nickname} sẽ nhận được thông báo từ bạn.`,
+            'Đã gửi tín hiệu',
+            `${partnerProfile.nickname} sẽ nhận được thông báo từ bạn.`,
         );
     };
 
-        const onRefresh = useCallback(async () => {
+    const onRefresh = useCallback(async () => {
         setRefreshing(true);
         try {
-        await Promise.all([
-        refetch(),
-        refetchCloudMedia(),
-        retryPendingSync(),
-        refreshLockets(),
-        syncCoupleStatusFromServer(),
-        pullSharedRoomSettingsFromServer(),
-        ]);
-    } finally {
-        setRefreshing(false);
-    }
+            await Promise.all([
+                refetch(),
+                refetchCloudMedia(),
+                retryPendingSync(),
+                refreshLockets(),
+                syncCoupleStatusFromServer(),
+                pullSharedRoomSettingsFromServer(),
+            ]);
+        } finally {
+            setRefreshing(false);
+        }
     }, [
         refetch,
         refetchCloudMedia,
@@ -1142,141 +883,141 @@ TypeScript
         refreshLockets,
         syncCoupleStatusFromServer,
         pullSharedRoomSettingsFromServer,
-        ]);
+    ]);
 
-        useEffect(() => {
+    useEffect(() => {
         if (!coupleId) return;
 
         const pullQuietly = () => {
-        pullSharedRoomSettingsFromServer().catch(() => null);
-    };
+            pullSharedRoomSettingsFromServer().catch(() => null);
+        };
 
         pullQuietly();
         const timer = setInterval(() => {
-        if (AppState.currentState === 'active') pullQuietly();
-    }, 20000);
+            if (AppState.currentState === 'active') pullQuietly();
+        }, 20000);
         const subscription = AppState.addEventListener('change', (state) => {
-        if (state === 'active') pullQuietly();
-    });
+            if (state === 'active') pullQuietly();
+        });
 
         return () => {
-        clearInterval(timer);
-        subscription.remove();
-    };
+            clearInterval(timer);
+            subscription.remove();
+        };
     }, [coupleId, pullSharedRoomSettingsFromServer]);
 
-        const exportBackupJson = async () => {
+    const exportBackupJson = async () => {
         return JSON.stringify(
-    {
-        exportedAt: new Date().toISOString(),
-        exportedByUserId: currentUserId,
-        coupleId,
-        anniversaryDate: effectiveAnniversaryIso,
-        heroWallpaperUri,
-        themePreset,
-        membersById,
-        myProfile: { ...myProfile, userId: currentUserId },
-        partnerProfile,
-        loveCoupons,
-        momoFund,
-        streakDays,
-        heartTapTotal,
-        events,
-        goals,
-        albumCategories,
-        itemCategoryMap,
-        locketSnaps: mergedLocketSnaps,
-        mediaList: mergedMediaList,
-        locketCount: mergedLocketSnaps.length,
-        mediaCount: mergedMediaList.length,
-    },
-        null,
-        2,
+            {
+                exportedAt: new Date().toISOString(),
+                exportedByUserId: currentUserId,
+                coupleId,
+                anniversaryDate: effectiveAnniversaryIso,
+                heroWallpaperUri,
+                themePreset,
+                membersById,
+                myProfile: { ...myProfile, userId: currentUserId },
+                partnerProfile,
+                loveCoupons,
+                momoFund,
+                streakDays,
+                heartTapTotal,
+                events,
+                goals,
+                albumCategories,
+                itemCategoryMap,
+                locketSnaps: mergedLocketSnaps,
+                mediaList: mergedMediaList,
+                locketCount: mergedLocketSnaps.length,
+                mediaCount: mergedMediaList.length,
+            },
+            null,
+            2,
         );
     };
 
-        const scrollX = useRef(new Animated.Value(0)).current;
-        const tabThumbAnim = useRef(new Animated.Value(0)).current;
-        const isProgrammaticScrollRef = useRef(false);
+    const scrollX = useRef(new Animated.Value(0)).current;
+    const tabThumbAnim = useRef(new Animated.Value(0)).current;
+    const isProgrammaticScrollRef = useRef(false);
 
-        const [switchWidth, setSwitchWidth] = useState(0);
-        const [pagerScrollEnabled, setPagerScrollEnabled] = useState(true);
-        const [pagerSize, setPagerSize] = useState({ width: 0, height: 0 });
+    const [switchWidth, setSwitchWidth] = useState(0);
+    const [pagerScrollEnabled, setPagerScrollEnabled] = useState(true);
+    const [pagerSize, setPagerSize] = useState({ width: 0, height: 0 });
 
-        // Lấy chính xác chiều rộng thực tế của khung Pager (tránh sai số của Safari / Web scrollbar)
-        const effectivePageWidth = pagerSize.width > 0 ? pagerSize.width : screenWidth;
+    // Lấy chính xác chiều rộng thực tế của khung Pager (tránh sai số của Safari / Web scrollbar)
+    const effectivePageWidth = pagerSize.width > 0 ? pagerSize.width : screenWidth;
 
-        const handlePagerLayout = useCallback((e: LayoutChangeEvent) => {
+    const handlePagerLayout = useCallback((e: LayoutChangeEvent) => {
         const w = Math.round(e.nativeEvent.layout.width);
         const h = Math.round(e.nativeEvent.layout.height);
         setPagerSize((prev) => {
-        if (Math.abs(prev.width - w) <= 1 && Math.abs(prev.height - h) <= 1) return prev;
-        return { width: w, height: h };
-    });
+            if (Math.abs(prev.width - w) <= 1 && Math.abs(prev.height - h) <= 1) return prev;
+            return { width: w, height: h };
+        });
     }, []);
 
-        // Mỗi trang ép cứng chiều rộng = effectivePageWidth, không cho Safari tự co/giãn
-        const pageStyle = React.useMemo(
+    // Mỗi trang ép cứng chiều rộng = effectivePageWidth, không cho Safari tự co/giãn
+    const pageStyle = React.useMemo(
         () => ({
-        width: effectivePageWidth,
-        minWidth: effectivePageWidth,
-        maxWidth: effectivePageWidth,
-        height: pagerSize.height > 0 ? pagerSize.height : ('100%' as const),
-        flexShrink: 0,
-        overflow: 'hidden' as const,
-    }),
+            width: effectivePageWidth,
+            minWidth: effectivePageWidth,
+            maxWidth: effectivePageWidth,
+            height: pagerSize.height > 0 ? pagerSize.height : ('100%' as const),
+            flexShrink: 0,
+            overflow: 'hidden' as const,
+        }),
         [effectivePageWidth, pagerSize.height],
-        );
+    );
 
-        const [reactionSnapId, setReactionSnapId] = useState<string | null>(null);
+    const [reactionSnapId, setReactionSnapId] = useState<string | null>(null);
 
-        const switchSegWidth = Math.max(0, (switchWidth - PAGE_SWITCH_PADDING * 2) / 2);
+    const switchSegWidth = Math.max(0, (switchWidth - PAGE_SWITCH_PADDING * 2) / 2);
 
-        // Vị trí cục trượt trên thanh Locket | Không gian
-        const thumbTranslateX = React.useMemo(
+    // Vị trí cục trượt trên thanh Locket | Không gian
+    const thumbTranslateX = React.useMemo(
         () =>
-        tabThumbAnim.interpolate({
-        inputRange: [0, 1],
-        outputRange: [0, switchSegWidth],
-        extrapolate: 'clamp',
-    }),
+            tabThumbAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, switchSegWidth],
+                extrapolate: 'clamp',
+            }),
         [tabThumbAnim, switchSegWidth],
-        );
+    );
 
-        // Hàm bấm chuyển trang dứt khoát 100% hành trình
-        const switchHorizontalPage = useCallback(
+    // Hàm bấm chuyển trang dứt khoát 100% hành trình
+    const switchHorizontalPage = useCallback(
         (pageIndex: 0 | 1) => {
-        void Haptics.selectionAsync().catch(() => {});
-        setCurrentPage(pageIndex);
-        isProgrammaticScrollRef.current = true;
+            void Haptics.selectionAsync().catch(() => {});
+            setCurrentPage(pageIndex);
+            isProgrammaticScrollRef.current = true;
 
-        Animated.spring(tabThumbAnim, {
-        toValue: pageIndex,
-        speed: 20,
-        bounciness: 0,
-        useNativeDriver: Platform.OS !== 'web',
-    }).start();
+            Animated.spring(tabThumbAnim, {
+                toValue: pageIndex,
+                speed: 20,
+                bounciness: 0,
+                useNativeDriver: Platform.OS !== 'web',
+            }).start();
 
-        const targetX = pageIndex * effectivePageWidth;
-        horizontalPagerRef.current?.scrollTo({
-        x: targetX,
-        animated: true,
-    });
+            const targetX = pageIndex * effectivePageWidth;
+            horizontalPagerRef.current?.scrollTo({
+                x: targetX,
+                animated: true,
+            });
 
-        setTimeout(() => {
-        isProgrammaticScrollRef.current = false;
-        // Đảm bảo trên Safari Web luôn khớp tuyệt đối toạ độ đích
-        horizontalPagerRef.current?.scrollTo({
-        x: targetX,
-        animated: false,
-    });
-    }, 320);
-    },
+            setTimeout(() => {
+                isProgrammaticScrollRef.current = false;
+                // Đảm bảo trên Safari Web luôn khớp tuyệt đối toạ độ đích
+                horizontalPagerRef.current?.scrollTo({
+                    x: targetX,
+                    animated: false,
+                });
+            }, 320);
+        },
         [effectivePageWidth, tabThumbAnim],
-        );
+    );
 
-        // Tự căn lại đúng vị trí khi xoay màn hình hoặc đổi kích thước khung nhìn
-        useEffect(() => {
+    // Tự căn lại đúng vị trí khi xoay màn hình hoặc đổi kích thước khung nhìn
+    useEffect(() => {
         if (effectivePageWidth <= 0) return;
         const targetX = currentPage * effectivePageWidth;
         horizontalPagerRef.current?.scrollTo({ x: targetX, animated: false });
@@ -1284,210 +1025,210 @@ TypeScript
         tabThumbAnim.setValue(currentPage);
     }, [effectivePageWidth]); // eslint-disable-line react-hooks/exhaustive-deps
 
-        const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-        useEffect(
+    const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(
         () => () => {
-        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
-    },
+            if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+        },
         [],
-        );
+    );
 
-        const syncPageFromOffset = useCallback(
+    const syncPageFromOffset = useCallback(
         (x: number) => {
-        if (effectivePageWidth <= 0) return;
-        const progress = Math.min(1, Math.max(0, x / effectivePageWidth));
+            if (effectivePageWidth <= 0) return;
+            const progress = Math.min(1, Math.max(0, x / effectivePageWidth));
 
-        // Khi người dùng vuốt tay trực tiếp thì cập nhật vị trí thanh tab theo ngón tay
-        if (!isProgrammaticScrollRef.current) {
-        tabThumbAnim.setValue(progress);
-    }
+            // Khi người dùng vuốt tay trực tiếp thì cập nhật vị trí thanh tab theo ngón tay
+            if (!isProgrammaticScrollRef.current) {
+                tabThumbAnim.setValue(progress);
+            }
 
-        const idx: 0 | 1 = progress >= 0.5 ? 1 : 0;
-        setCurrentPage((prev) => (prev === idx ? prev : idx));
+            const idx: 0 | 1 = progress >= 0.5 ? 1 : 0;
+            setCurrentPage((prev) => (prev === idx ? prev : idx));
 
-        // Trên Web: chỉ tự hút về trang gần nhất sau khi người dùng đã ngừng vuốt hẳn 220ms
-        if (Platform.OS === 'web' && !isProgrammaticScrollRef.current) {
-        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
-        settleTimerRef.current = setTimeout(() => {
-        const target = idx * effectivePageWidth;
-        Animated.spring(tabThumbAnim, {
-        toValue: idx,
-        speed: 20,
-        bounciness: 0,
-        useNativeDriver: false,
-    }).start();
-        if (Math.abs(x - target) > 2) {
-        horizontalPagerRef.current?.scrollTo({ x: target, animated: true });
-    }
-    }, 220);
-    }
-    },
+            // Trên Web: chỉ tự hút về trang gần nhất sau khi người dùng đã ngừng vuốt hẳn 220ms
+            if (Platform.OS === 'web' && !isProgrammaticScrollRef.current) {
+                if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+                settleTimerRef.current = setTimeout(() => {
+                    const target = idx * effectivePageWidth;
+                    Animated.spring(tabThumbAnim, {
+                        toValue: idx,
+                        speed: 20,
+                        bounciness: 0,
+                        useNativeDriver: false,
+                    }).start();
+                    if (Math.abs(x - target) > 2) {
+                        horizontalPagerRef.current?.scrollTo({ x: target, animated: true });
+                    }
+                }, 220);
+            }
+        },
         [effectivePageWidth, tabThumbAnim],
-        );
+    );
 
-        const handleHorizontalMomentumEnd = useCallback(
+    const handleHorizontalMomentumEnd = useCallback(
         (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-        const offsetX = e.nativeEvent.contentOffset.x;
-        const nextIndex: 0 | 1 =
-        Math.round(offsetX / Math.max(1, effectivePageWidth)) >= 1 ? 1 : 0;
-        setCurrentPage(nextIndex);
-        Animated.spring(tabThumbAnim, {
-        toValue: nextIndex,
-        speed: 20,
-        bounciness: 0,
-        useNativeDriver: Platform.OS !== 'web',
-    }).start();
-    },
+            const offsetX = e.nativeEvent.contentOffset.x;
+            const nextIndex: 0 | 1 =
+                Math.round(offsetX / Math.max(1, effectivePageWidth)) >= 1 ? 1 : 0;
+            setCurrentPage(nextIndex);
+            Animated.spring(tabThumbAnim, {
+                toValue: nextIndex,
+                speed: 20,
+                bounciness: 0,
+                useNativeDriver: Platform.OS !== 'web',
+            }).start();
+        },
         [effectivePageWidth, tabThumbAnim],
-        );
+    );
 
-        const onPagerScroll = React.useMemo(
+    const onPagerScroll = React.useMemo(
         () =>
-        Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], {
-        useNativeDriver: false,
-        listener: (e: NativeSyntheticEvent<NativeScrollEvent>) =>
-        syncPageFromOffset(e.nativeEvent.contentOffset.x),
-    }),
+            Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], {
+                useNativeDriver: false,
+                listener: (e: NativeSyntheticEvent<NativeScrollEvent>) =>
+                    syncPageFromOffset(e.nativeEvent.contentOffset.x),
+            }),
         [scrollX, syncPageFromOffset],
-        );
+    );
 
-        const handleSwitchLayout = useCallback((e: LayoutChangeEvent) => {
+    const handleSwitchLayout = useCallback((e: LayoutChangeEvent) => {
         setSwitchWidth(Math.round(e.nativeEvent.layout.width));
     }, []);
 
-        useEffect(() => {
+    useEffect(() => {
         if (isAppLocked) {
-        scrollX.setValue(0);
-        tabThumbAnim.setValue(0);
-        setCurrentPage(0);
-        horizontalPagerRef.current?.scrollTo({ x: 0, animated: false });
-    }
+            scrollX.setValue(0);
+            tabThumbAnim.setValue(0);
+            setCurrentPage(0);
+            horizontalPagerRef.current?.scrollTo({ x: 0, animated: false });
+        }
     }, [isAppLocked, scrollX, tabThumbAnim]);
 
-        const handlePagerLock = useCallback((locked: boolean) => {
+    const handlePagerLock = useCallback((locked: boolean) => {
         setPagerScrollEnabled(!locked);
     }, []);
 
-        const handlePickAndSaveAlbumMedia = useCallback(
+    const handlePickAndSaveAlbumMedia = useCallback(
         async (type: 'IMAGE' | 'VIDEO', targetCategoryOverride?: string) => {
-        const activeCat =
-        targetCategoryOverride ??
-        (selectedAlbumCategory !== 'ALL' && selectedAlbumCategory !== 'UNCATEGORIZED'
-        ? selectedAlbumCategory
-        : null);
+            const activeCat =
+                targetCategoryOverride ??
+                (selectedAlbumCategory !== 'ALL' && selectedAlbumCategory !== 'UNCATEGORIZED'
+                    ? selectedAlbumCategory
+                    : null);
 
-        pendingTargetCategoryRef.current = activeCat;
-        const prevIds = new Set(mergedMediaList.map((m) => m.id));
+            pendingTargetCategoryRef.current = activeCat;
+            const prevIds = new Set(mergedMediaList.map((m) => m.id));
 
-        await pickAndSaveMedia(type, activeCat || undefined);
+            await pickAndSaveMedia(type, activeCat || undefined);
 
-        if (coupleId) {
-        const refreshed = await refetchCloudMedia();
-        const albumList = Array.isArray(refreshed.data?.albumMedia)
-        ? refreshed.data.albumMedia
-        : [];
-        const newestCloud = albumList.find(
-        (m) => m && m.caption !== 'thumbnail' && m.caption !== 'Hero Wallpaper',
-        );
-        if (activeCat && newestCloud && !prevIds.has(newestCloud.id)) {
-        await assignMediaToCategory(newestCloud.id, activeCat, newestCloud.remoteUrl);
-    }
-    }
-    },
+            if (coupleId) {
+                const refreshed = await refetchCloudMedia();
+                const albumList = Array.isArray(refreshed.data?.albumMedia)
+                    ? refreshed.data.albumMedia
+                    : [];
+                const newestCloud = albumList.find(
+                    (m) => m && m.caption !== 'thumbnail' && m.caption !== 'Hero Wallpaper',
+                );
+                if (activeCat && newestCloud && !prevIds.has(newestCloud.id)) {
+                    await assignMediaToCategory(newestCloud.id, activeCat, newestCloud.remoteUrl);
+                }
+            }
+        },
         [
-        selectedAlbumCategory,
-        mergedMediaList,
-        pickAndSaveMedia,
-        coupleId,
-        refetchCloudMedia,
-        assignMediaToCategory,
+            selectedAlbumCategory,
+            mergedMediaList,
+            pickAndSaveMedia,
+            coupleId,
+            refetchCloudMedia,
+            assignMediaToCategory,
         ],
-        );
+    );
 
-        useEffect(() => {
+    useEffect(() => {
         const targetCat = pendingTargetCategoryRef.current;
         if (!targetCat || mediaList.length === 0) return;
         const newestLocal = mediaList.find(
-        (m) => m.caption !== 'thumbnail' && m.caption !== 'Hero Wallpaper',
+            (m) => m.caption !== 'thumbnail' && m.caption !== 'Hero Wallpaper',
         );
         if (newestLocal && !itemCategoryMap[newestLocal.id]) {
-        void assignMediaToCategory(newestLocal.id, targetCat, newestLocal.remoteUrl);
-        pendingTargetCategoryRef.current = null;
-    }
+            void assignMediaToCategory(newestLocal.id, targetCat, newestLocal.remoteUrl);
+            pendingTargetCategoryRef.current = null;
+        }
     }, [mediaList, itemCategoryMap, assignMediaToCategory]);
 
-        const handleSwipeToDashboard = useCallback(() => {
+    const handleSwipeToDashboard = useCallback(() => {
         switchHorizontalPage(1);
     }, [switchHorizontalPage]);
 
-        const handleDeleteAlbumMedia = useCallback(
+    const handleDeleteAlbumMedia = useCallback(
         async (id: string) => {
-        const targetItem = mergedMediaList.find((m) => m.id === id);
+            const targetItem = mergedMediaList.find((m) => m.id === id);
 
-        queryClient.setQueryData(
-        ['cloudWorkspaceMedia', coupleId, currentUserId],
-        (oldData: any) => {
-        if (!oldData) return oldData;
-        return {
-        ...oldData,
-        albumMedia: Array.isArray(oldData.albumMedia)
-        ? oldData.albumMedia.filter(
-        (m: any) =>
-        m.id !== id &&
-        (!targetItem?.remoteUrl || m.remoteUrl !== targetItem.remoteUrl),
-        )
-        : [],
-    };
-    },
-        );
+            queryClient.setQueryData(
+                ['cloudWorkspaceMedia', coupleId, currentUserId],
+                (oldData: any) => {
+                    if (!oldData) return oldData;
+                    return {
+                        ...oldData,
+                        albumMedia: Array.isArray(oldData.albumMedia)
+                            ? oldData.albumMedia.filter(
+                                (m: any) =>
+                                    m.id !== id &&
+                                    (!targetItem?.remoteUrl || m.remoteUrl !== targetItem.remoteUrl),
+                            )
+                            : [],
+                    };
+                },
+            );
 
-        const updatedMedia = mergedMediaList.filter((m) => m.id !== id);
-        void restoreWorkspaceBackup({
-        mediaList: updatedMedia,
-    });
+            const updatedMedia = mergedMediaList.filter((m) => m.id !== id);
+            void restoreWorkspaceBackup({
+                mediaList: updatedMedia,
+            });
 
-        try {
-        await deleteMedia(id);
-        if (coupleId) {
-        await queryClient.invalidateQueries({
-        queryKey: ['cloudWorkspaceMedia', coupleId],
-    });
-    }
-    } catch (err) {
-        console.warn('Không thể xóa media trên Cloud:', err);
-    }
-    },
+            try {
+                await deleteMedia(id);
+                if (coupleId) {
+                    await queryClient.invalidateQueries({
+                        queryKey: ['cloudWorkspaceMedia', coupleId],
+                    });
+                }
+            } catch (err) {
+                console.warn('Không thể xóa media trên Cloud:', err);
+            }
+        },
         [
-        mergedMediaList,
-        deleteMedia,
-        queryClient,
-        coupleId,
-        currentUserId,
-        restoreWorkspaceBackup,
+            mergedMediaList,
+            deleteMedia,
+            queryClient,
+            coupleId,
+            currentUserId,
+            restoreWorkspaceBackup,
         ],
-        );
+    );
 
-        const reactionSnap = React.useMemo(
+    const reactionSnap = React.useMemo(
         () => mergedLocketSnaps.find((s) => s.id === reactionSnapId) ?? null,
         [mergedLocketSnaps, reactionSnapId],
-        );
-        const closeReactionSheet = useCallback(() => setReactionSnapId(null), []);
+    );
+    const closeReactionSheet = useCallback(() => setReactionSnapId(null), []);
 
-        const renderLocketSnap = useCallback(
+    const renderLocketSnap = useCallback(
         ({ item }: { item: LocketSnapView }) => (
-        <View style={styles.centeredSection}>
-        <LocketSnapCard
-            snap={item}
-            colors={colors}
-            viewerId={currentUserId}
-            onDelete={handleDeleteLocketSnap}
-            onReact={handleReactLocketSnap}
-            onOpenReactions={setReactionSnapId}
-        />
-    </View>
-),
-    [colors, currentUserId, handleDeleteLocketSnap, handleReactLocketSnap],
-);
+            <View style={styles.centeredSection}>
+                <LocketSnapCard
+                    snap={item}
+                    colors={colors}
+                    viewerId={currentUserId}
+                    onDelete={handleDeleteLocketSnap}
+                    onReact={handleReactLocketSnap}
+                    onOpenReactions={setReactionSnapId}
+                />
+            </View>
+        ),
+        [colors, currentUserId, handleDeleteLocketSnap, handleReactLocketSnap],
+    );
 
     if (isAppLocked) {
         return (
@@ -2944,100 +2685,100 @@ const styles = StyleSheet.create({
     screen: { flex: 1 },
     centeredSection: {
         width: '100%',
-            maxWidth: CONTENT_MAX_WIDTH,
-            alignSelf: 'center',
-            overflow: 'hidden',
+        maxWidth: CONTENT_MAX_WIDTH,
+        alignSelf: 'center',
+        overflow: 'hidden',
     },
     lockScreen: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
     lockTitle: { fontSize: 19, fontWeight: '700', marginBottom: 6 },
     pinInputBox: {
         width: 170,
-            height: 52,
-            borderWidth: 1.5,
-            borderRadius: 12,
-            fontSize: 26,
-            textAlign: 'center',
-            letterSpacing: 12,
-            fontWeight: '700',
+        height: 52,
+        borderWidth: 1.5,
+        borderRadius: 12,
+        fontSize: 26,
+        textAlign: 'center',
+        letterSpacing: 12,
+        fontWeight: '700',
     },
     topBar: {
         paddingHorizontal: METRICS.paddingHorizontal,
-            paddingTop: 8,
-            paddingBottom: 10,
-            borderBottomWidth: StyleSheet.hairlineWidth,
+        paddingTop: 8,
+        paddingBottom: 10,
+        borderBottomWidth: StyleSheet.hairlineWidth,
     },
     topBarInner: {
         width: '100%',
-            maxWidth: CONTENT_MAX_WIDTH,
-            alignSelf: 'center',
-            gap: 8,
+        maxWidth: CONTENT_MAX_WIDTH,
+        alignSelf: 'center',
+        gap: 8,
     },
     topBarRow: {
         flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
     },
     topBarProfileBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
     miniAvatar: {
         width: 34,
-            height: 34,
-            borderRadius: 17,
-            justifyContent: 'center',
-            alignItems: 'center',
-            overflow: 'hidden',
+        height: 34,
+        borderRadius: 17,
+        justifyContent: 'center',
+        alignItems: 'center',
+        overflow: 'hidden',
     },
     miniAvatarImg: { width: '100%', height: '100%' },
     brandTitle: { fontSize: 16, fontWeight: '700', letterSpacing: -0.3 },
     pageSwitchTrack: {
         flexDirection: 'row',
-            height: 34,
-            borderRadius: 14,
-            padding: PAGE_SWITCH_PADDING,
+        height: 34,
+        borderRadius: 14,
+        padding: PAGE_SWITCH_PADDING,
     },
     pageSwitchThumb: {
         position: 'absolute',
-            top: PAGE_SWITCH_PADDING,
-            bottom: PAGE_SWITCH_PADDING,
-            left: PAGE_SWITCH_PADDING,
-            borderRadius: 11,
+        top: PAGE_SWITCH_PADDING,
+        bottom: PAGE_SWITCH_PADDING,
+        left: PAGE_SWITCH_PADDING,
+        borderRadius: 11,
     },
     pageSwitchItem: {
         flex: 1,
-            justifyContent: 'center',
-            alignItems: 'center',
-            borderRadius: 11,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderRadius: 11,
     },
     settingsBtn: {
         minHeight: 34,
-            paddingHorizontal: 10,
-            borderRadius: 17,
-            justifyContent: 'center',
-            alignItems: 'center',
+        paddingHorizontal: 10,
+        borderRadius: 17,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     settingsBtnText: { fontSize: 12, fontWeight: '600' },
     scrollContent: {
         width: '100%',
-            paddingHorizontal: METRICS.paddingHorizontal,
-            paddingTop: 12,
-            paddingBottom: 32,
+        paddingHorizontal: METRICS.paddingHorizontal,
+        paddingTop: 12,
+        paddingBottom: 32,
     },
     gridTabBar: {
         flexDirection: 'row',
-            borderRadius: 12,
-            padding: 3,
-            marginBottom: 18,
+        borderRadius: 12,
+        padding: 3,
+        marginBottom: 18,
     },
     gridTabItem: {
         flex: 1,
-            minHeight: 38,
-            paddingHorizontal: 4,
-            borderRadius: 9,
-            justifyContent: 'center',
-            alignItems: 'center',
+        minHeight: 38,
+        paddingHorizontal: 4,
+        borderRadius: 9,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     gridTabItemActive: {
-    ...Platform.select({
+        ...Platform.select({
             ios: {
                 shadowColor: '#000',
                 shadowOffset: { width: 0, height: 1 },
@@ -3050,182 +2791,182 @@ const styles = StyleSheet.create({
     sectionWrap: { marginBottom: 28 },
     sectionHeaderRow: {
         flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: 8,
-            marginBottom: 12,
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginBottom: 12,
     },
     actionGroupWrap: {
         flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: 8,
-            alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 8,
+        alignItems: 'center',
     },
     sectionTitle: { fontSize: 16, fontWeight: '700' },
     addBtn: {
         minHeight: 36,
-            paddingHorizontal: 14,
-            borderRadius: 18,
-            justifyContent: 'center',
-            alignItems: 'center',
+        paddingHorizontal: 14,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     addBtnText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
     emptyCard: {
         borderRadius: METRICS.radiusMd,
-            padding: 24,
-            alignItems: 'center',
-            borderWidth: 1,
+        padding: 24,
+        alignItems: 'center',
+        borderWidth: 1,
     },
     emptyTitle: { fontSize: 14, fontWeight: '600', marginBottom: 4 },
     itemCard: {
         borderRadius: METRICS.radiusMd,
-            padding: 16,
-            marginBottom: 12,
-            borderWidth: 1,
+        padding: 16,
+        marginBottom: 12,
+        borderWidth: 1,
     },
     eventMainRow: {
         flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            gap: 8,
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        gap: 8,
     },
     daysLeftBadge: {
         paddingHorizontal: 10,
-            paddingVertical: 6,
-            borderRadius: 10,
-            maxWidth: 100,
+        paddingVertical: 6,
+        borderRadius: 10,
+        maxWidth: 100,
     },
     subtleReminderNote: {
         fontSize: 13,
-            lineHeight: 19,
-            marginTop: 10,
-            paddingTop: 10,
-            borderTopWidth: StyleSheet.hairlineWidth,
+        lineHeight: 19,
+        marginTop: 10,
+        paddingTop: 10,
+        borderTopWidth: StyleSheet.hairlineWidth,
     },
     cardBottomActions: {
         flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: 8,
-            marginTop: 10,
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 10,
     },
     eventActionBtnGroup: {
         flexDirection: 'row',
-            alignItems: 'center',
-            gap: 16,
-            flexShrink: 0,
+        alignItems: 'center',
+        gap: 16,
+        flexShrink: 0,
     },
     cardTopRow: {
         flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: 8,
-            marginBottom: 6,
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginBottom: 6,
     },
     cardMainTitle: { fontSize: 15, fontWeight: '700', lineHeight: 20 },
     goalCheckRow: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
     checkbox: {
         width: 20,
-            height: 20,
-            borderRadius: 6,
-            borderWidth: 1.5,
-            marginRight: 10,
-            justifyContent: 'center',
-            alignItems: 'center',
+        height: 20,
+        borderRadius: 6,
+        borderWidth: 1.5,
+        marginRight: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     goalProgressSection: { marginTop: 10 },
     progressBarBg: { height: 6, borderRadius: 3, overflow: 'hidden', width: '100%' },
     progressBarFill: { height: '100%', borderRadius: 3 },
     momoActionsRow: {
         flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: 8,
-            marginTop: 12,
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 12,
     },
     momoActionBtnIn: {
         flexGrow: 1,
-            minWidth: 100,
-            minHeight: 36,
-            borderRadius: 10,
-            backgroundColor: '#DCFCE7',
-            justifyContent: 'center',
-            alignItems: 'center',
-            paddingHorizontal: 8,
+        minWidth: 100,
+        minHeight: 36,
+        borderRadius: 10,
+        backgroundColor: '#DCFCE7',
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 8,
     },
     momoActionBtnOut: {
         flexGrow: 1,
-            minWidth: 100,
-            minHeight: 36,
-            borderRadius: 10,
-            backgroundColor: '#FEE2E2',
-            justifyContent: 'center',
-            alignItems: 'center',
-            paddingHorizontal: 8,
+        minWidth: 100,
+        minHeight: 36,
+        borderRadius: 10,
+        backgroundColor: '#FEE2E2',
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 8,
     },
     momoActionBtnScan: {
         flexGrow: 1.2,
-            minWidth: 110,
-            minHeight: 36,
-            borderRadius: 10,
-            backgroundColor: '#FCE7F3',
-            justifyContent: 'center',
-            alignItems: 'center',
-            paddingHorizontal: 8,
+        minWidth: 110,
+        minHeight: 36,
+        borderRadius: 10,
+        backgroundColor: '#FCE7F3',
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 8,
     },
     qaInput: {
         height: 44,
-            borderWidth: 1,
-            borderRadius: 10,
-            paddingHorizontal: 12,
-            fontSize: 14,
+        borderWidth: 1,
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        fontSize: 14,
     },
     iosSheetBackdrop: { flex: 1, justifyContent: 'flex-end' },
     iosSheetBox: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 24 },
     iosSheetHeader: {
         flexDirection: 'row',
-            justifyContent: 'space-between',
-            padding: 16,
+        justifyContent: 'space-between',
+        padding: 16,
     },
     mediaModalBackdrop: {
         flex: 1,
-            justifyContent: 'center',
-            alignItems: 'center',
-            padding: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 16,
     },
     mediaModalCard: {
         width: '100%',
-            maxWidth: 520,
-            borderRadius: 18,
-            padding: 16,
+        maxWidth: 520,
+        borderRadius: 18,
+        padding: 16,
     },
     fullPreviewImage: {
         width: '100%',
-            borderRadius: 12,
-            backgroundColor: '#0F172A',
+        borderRadius: 12,
+        backgroundColor: '#0F172A',
     },
     inlineVideoBox: {
         width: '100%',
-            borderRadius: 12,
-            backgroundColor: '#000000',
+        borderRadius: 12,
+        backgroundColor: '#000000',
     },
     modalBottomButtons: {
         flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: 8,
-            marginTop: 16,
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 16,
     },
     mediaFilterRow: {
         flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: 8,
-            marginBottom: 12,
+        flexWrap: 'wrap',
+        gap: 8,
+        marginBottom: 12,
     },
     mediaFilterChip: {
         paddingHorizontal: 12,
-            paddingVertical: 6,
-            borderRadius: 14,
+        paddingVertical: 6,
+        borderRadius: 14,
     },
 });
